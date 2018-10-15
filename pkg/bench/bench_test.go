@@ -1126,6 +1126,47 @@ func BenchmarkIndexJoin(b *testing.B) {
 	})
 }
 
+// BenchmarkZigzagJoin measure a zigzag-join with 1000 rows.
+func BenchmarkZigzagJoin(b *testing.B) {
+	defer log.Scope(b).Close(b)
+	ForEachDB(b, func(b *testing.B, db *gosql.DB) {
+		// The table will have an extra column not contained in the index to force a
+		// join with the PK.
+		create := `
+		 CREATE TABLE tzigzag (
+				 v INT NULL,
+				 extra INT NULL,
+				 INDEX idx (v ASC),
+				 INDEX idxtra (extra ASC)
+		 )
+		`
+		// We'll insert 10000 rows with random values below 10000 in the index. We'll
+		// then query the index with a query that retrieves all the data (but the
+		// optimizer doesn't know that).
+		insert := "insert into tzigzag(v,extra) select generate_series(1,1000), (random()*1000)::int"
+
+		if _, err := db.Exec(create); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := db.Exec(insert); err != nil {
+			b.Fatal(err)
+		}
+
+		insert = "insert into tzigzag(v,extra) select 901, generate_series(1, 1000)"
+
+		if _, err := db.Exec(insert); err != nil {
+			b.Fatal(err)
+		}
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			if _, err := db.Exec("select * from bench.tzigzag where v = 901 and extra = 987"); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
 func BenchmarkSortJoinAggregation(b *testing.B) {
 	defer log.Scope(b).Close(b)
 	ForEachDB(b, func(b *testing.B, db *gosql.DB) {
