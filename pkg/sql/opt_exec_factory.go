@@ -622,6 +622,128 @@ func (ef *execFactory) ConstructLookupJoin(
 	return n, nil
 }
 
+// ConstructZigzagJoin is part of the exec.Factory interface.
+func (ef *execFactory) ConstructZigzagJoin(
+	joinType sqlbase.JoinType,
+	leftTable opt.Table,
+	leftIndex opt.Index,
+	rightTable opt.Table,
+	rightIndex opt.Index,
+	leftEqCols []exec.ColumnOrdinal,
+	leftCols exec.ColumnOrdinalSet,
+	rightEqCols []exec.ColumnOrdinal,
+	rightCols exec.ColumnOrdinalSet,
+	onCond tree.TypedExpr,
+	fixedVals []exec.Node,
+	reqOrdering exec.OutputOrdering,
+) (exec.Node, error) {
+	leftIndexDesc := leftIndex.(*optIndex).desc
+	leftTabDesc := leftTable.(*optTable).desc
+	rightIndexDesc := rightIndex.(*optIndex).desc
+	rightTabDesc := rightTable.(*optTable).desc
+
+	leftColDescs := make([]sqlbase.ColumnDescriptor, 0, leftCols.Len())
+	leftColCfg := scanColumnsConfig{
+		wantedColumns: make([]tree.ColumnID, 0, leftCols.Len()),
+	}
+
+	err := leftIndexDesc.RunOverAllColumns(func(c sqlbase.ColumnID) error {
+		colDesc, err := leftTabDesc.FindColumnByID(c)
+		if err != nil {
+			return err
+		}
+		leftColDescs = append(leftColDescs, *colDesc)
+		leftColCfg.wantedColumns = append(leftColCfg.wantedColumns, tree.ColumnID(c))
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	leftScan := ef.planner.Scan()
+	if err := leftScan.initTable(context.TODO(), ef.planner, leftTabDesc, nil, leftColCfg); err != nil {
+		return nil, err
+	}
+
+	leftScan.index = leftIndexDesc
+	leftScan.run.isSecondaryIndex = (leftIndexDesc != &leftTabDesc.PrimaryIndex)
+
+	rightColDescs := make([]sqlbase.ColumnDescriptor, 0, rightCols.Len())
+	rightColCfg := scanColumnsConfig{
+		wantedColumns: make([]tree.ColumnID, 0, leftCols.Len()),
+	}
+
+	err = rightIndexDesc.RunOverAllColumns(func(c sqlbase.ColumnID) error {
+		colDesc, err := rightTabDesc.FindColumnByID(c)
+		if err != nil {
+			return err
+		}
+		rightColDescs = append(rightColDescs, *colDesc)
+		rightColCfg.wantedColumns = append(rightColCfg.wantedColumns, tree.ColumnID(c))
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	rightScan := ef.planner.Scan()
+	if err := rightScan.initTable(context.TODO(), ef.planner, rightTabDesc, nil, rightColCfg); err != nil {
+		return nil, err
+	}
+
+	rightScan.index = rightIndexDesc
+	rightScan.run.isSecondaryIndex = (rightIndexDesc != &rightTabDesc.PrimaryIndex)
+	if err := rightScan.initTable(context.TODO(), ef.planner, rightTabDesc, nil, rightColCfg); err != nil {
+		return nil, err
+	}
+
+	rightScan.index = rightIndexDesc
+	rightScan.run.isSecondaryIndex = (rightIndexDesc != &rightTabDesc.PrimaryIndex)
+
+	n := &zigzagJoinNode{
+		joinType: joinType,
+		props: physicalProps{
+			ordering: sqlbase.ColumnOrdering(reqOrdering),
+		},
+	}
+	if onCond != nil && onCond != tree.DBoolTrue {
+		n.onCond = onCond
+	}
+	n.sides = make([]zigzagJoinSide, 2)
+	n.sides[0].index = leftScan
+	n.sides[1].index = rightScan
+	n.sides[0].eqCols = make([]int, len(leftEqCols))
+	n.sides[1].eqCols = make([]int, len(rightEqCols))
+
+	if len(leftEqCols) != len(rightEqCols) {
+		panic("creating zigzag join with unequal number of equated cols")
+	}
+
+	for i, c := range leftEqCols {
+		n.sides[0].eqCols[i] = int(c)
+		n.sides[1].eqCols[i] = int(rightEqCols[i])
+	}
+	leftResultCols := sqlbase.ResultColumnsFromColDescs(leftColDescs)
+	rightResultCols := sqlbase.ResultColumnsFromColDescs(rightColDescs)
+	n.columns = make(sqlbase.ResultColumns, 0, leftCols.Len()+rightCols.Len())
+	n.columns = append(n.columns, leftResultCols...)
+	n.columns = append(n.columns, rightResultCols...)
+
+	n.fixedVals = make([]*valuesNode, len(fixedVals))
+	for i := range fixedVals {
+		valNode, ok := fixedVals[i].(*valuesNode)
+		if !ok {
+			panic("non-values node passed as fixed value to zigzag join")
+		}
+		n.fixedVals[i] = valNode
+	}
+	return n, nil
+}
+
 // ConstructLimit is part of the exec.Factory interface.
 func (ef *execFactory) ConstructLimit(
 	input exec.Node, limit, offset tree.TypedExpr,

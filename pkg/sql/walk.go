@@ -673,6 +673,7 @@ var planNodeNames = map[reflect.Type]string{
 	reflect.TypeOf(&joinNode{}):                 "join",
 	reflect.TypeOf(&limitNode{}):                "limit",
 	reflect.TypeOf(&lookupJoinNode{}):           "lookup-join",
+	reflect.TypeOf(&zigzagJoinNode{}):           "zigzag-join",
 	reflect.TypeOf(&ordinalityNode{}):           "ordinality",
 	reflect.TypeOf(&projectSetNode{}):           "project set",
 	reflect.TypeOf(&relocateNode{}):             "relocate",

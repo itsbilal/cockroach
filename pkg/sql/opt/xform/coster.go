@@ -124,6 +124,9 @@ func (c *coster) ComputeCost(candidate memo.RelExpr, required *physical.Required
 	case opt.LookupJoinOp:
 		cost = c.computeLookupJoinCost(candidate.(*memo.LookupJoinExpr))
 
+	case opt.ZigzagJoinOp:
+		cost = c.computeZigzagJoinCost(candidate.(*memo.ZigzagJoinExpr))
+
 	case opt.UnionOp, opt.IntersectOp, opt.ExceptOp,
 		opt.UnionAllOp, opt.IntersectAllOp, opt.ExceptAllOp:
 		cost = c.computeSetCost(candidate)
@@ -305,6 +308,18 @@ func (c *coster) computeLookupJoinCost(join *memo.LookupJoinExpr) memo.Cost {
 	numLookupCols := join.Cols.Difference(join.Input.Relational().OutputCols).Len()
 	perRowCost := seqIOCostFactor + c.rowScanCost(join.Table, join.Index, numLookupCols)
 	cost += memo.Cost(join.Relational().Stats.RowCount) * perRowCost
+	return cost
+}
+
+func (c *coster) computeZigzagJoinCost(join *memo.ZigzagJoinExpr) memo.Cost {
+	rowCount := join.Relational().Stats.RowCount
+
+	// Zigzag property: we will only peer through one of the two indexes.
+	// Assume the upper bound on rows to be the larger table/index.
+	cost := memo.Cost(rowCount) * randIOCostFactor
+
+	// Add the cost of emitting the rows.
+	cost += memo.Cost(rowCount) * cpuCostFactor
 	return cost
 }
 

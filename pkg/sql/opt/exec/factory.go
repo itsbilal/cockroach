@@ -181,6 +181,22 @@ type Factory interface {
 		reqOrdering OutputOrdering,
 	) (Node, error)
 
+	// ConstructZigzagJoin constructs a zigzag join.
+	ConstructZigzagJoin(
+		joinType sqlbase.JoinType,
+		leftTable opt.Table,
+		leftIndex opt.Index,
+		rightTable opt.Table,
+		rightIndex opt.Index,
+		leftEqCols []ColumnOrdinal,
+		leftCols ColumnOrdinalSet,
+		rightEqCols []ColumnOrdinal,
+		rightCols ColumnOrdinalSet,
+		onCond tree.TypedExpr,
+		fixedVals []Node,
+		reqOrdering OutputOrdering,
+	) (Node, error)
+
 	// ConstructLimit returns a node that implements LIMIT and/or OFFSET on the
 	// results of the given node. If one or the other is not needed, then it is
 	// set to nil.

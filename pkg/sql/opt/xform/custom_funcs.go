@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/ordering"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/props/physical"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/types"
 	"github.com/cockroachdb/cockroach/pkg/util"
 )
 
@@ -54,6 +55,13 @@ func (c *CustomFuncs) IsCanonicalScan(scan *memo.ScanPrivate) bool {
 	return scan.Index == opt.PrimaryIndex &&
 		scan.Constraint == nil &&
 		scan.HardLimit == 0
+}
+
+// IsConstrainedScan returns true if the given ScanPrivate is an original
+// unaltered primary index Scan operator (i.e. unconstrained and not limited).
+func (c *CustomFuncs) IsConstrainedSecondaryScan(scan *memo.ScanPrivate) bool {
+	return scan.Index != opt.PrimaryIndex &&
+		scan.Constraint != nil
 }
 
 // GenerateIndexScans enumerates all secondary indexes on the given Scan
@@ -747,6 +755,180 @@ func (c *CustomFuncs) GenerateLookupJoins(
 
 		// Create the LookupJoin for the index join in the same group.
 		c.e.mem.AddLookupJoinToGroup(&indexJoin, grp)
+	}
+}
+
+// GenerateZigzagJoins generates zigzag joins.
+// TODO(itsbilal): Fill this.
+func (c *CustomFuncs) GenerateZigzagJoins(
+	grp memo.RelExpr,
+	scanPrivate *memo.ScanPrivate,
+	filters memo.FiltersExpr,
+) {
+
+	fixedCols := memo.ExtractFixedColumns(filters, c.e.mem, c.e.evalCtx)
+
+	if fixedCols.Len() == 0 {
+		return
+	}
+
+	// Iterate through indexes, looking for those prefixed with rightEq cols.
+	// TODO(itsbilal): Do this in one pass with a priority queue.
+	var iter, iter2 scanIndexIter
+	iter.init(c.e.mem, scanPrivate)
+	iter2.init(c.e.mem, scanPrivate)
+	for iter.next() {
+		if iter.indexOrdinal == opt.PrimaryIndex {
+			continue
+		}
+		// Short-circuit quickly if the first column in index is not a fixed column.
+		if !fixedCols.Contains(int(scanPrivate.Table.ColumnID(iter.index.Column(0).Ordinal))) {
+			continue
+		}
+
+		for iter2.next() {
+			if iter2.indexOrdinal == opt.PrimaryIndex || iter2.indexOrdinal == iter.indexOrdinal {
+				continue
+			}
+			eqCols := iter.indexCols().Intersection(iter2.indexCols())
+			prefixCols := eqCols.Union(fixedCols)
+
+			if !prefixCols.Contains(int(scanPrivate.Table.ColumnID(iter2.index.Column(0).Ordinal))) {
+				continue
+			}
+
+			zigzagJoin := memo.ZigzagJoinExpr{On: filters}
+			zigzagJoin.JoinType = opt.InnerJoinOp
+			zigzagJoin.LeftTable = scanPrivate.Table
+			zigzagJoin.RightTable = scanPrivate.Table
+			zigzagJoin.LeftIndex = iter.indexOrdinal
+			zigzagJoin.RightIndex = iter2.indexOrdinal
+
+			// TODO(itsbilal): Handle cases of equalities in filters.
+			zigzagJoin.LeftEqCols = make(opt.ColList, 0, eqCols.Len())
+			zigzagJoin.RightEqCols = make(opt.ColList, 0, eqCols.Len())
+			eqCols.ForEach(func(colID int) {
+				zigzagJoin.LeftEqCols = append(zigzagJoin.LeftEqCols, opt.ColumnID(colID))
+				zigzagJoin.RightEqCols = append(zigzagJoin.RightEqCols, opt.ColumnID(colID))
+			})
+
+			zigzagJoin.FixedVals = make(memo.ScalarListExpr, 2)
+			leftVals := make(memo.ScalarListExpr, 0, fixedCols.Len())
+			leftTypes := make([]types.T, 0, fixedCols.Len())
+			rightVals := make(memo.ScalarListExpr, 0, fixedCols.Len())
+			rightTypes := make([]types.T, 0, fixedCols.Len())
+			zigzagJoin.LeftFixedCols = make(opt.ColList, 0, fixedCols.Len())
+			zigzagJoin.RightFixedCols = make(opt.ColList, 0, fixedCols.Len())
+			fixedValMap := memo.ExtractValuesFromFilter(filters, fixedCols)
+			for i, cnt := 0, iter.index.ColumnCount(); i < cnt; i++ {
+				colID := scanPrivate.Table.ColumnID(iter.index.Column(i).Ordinal)
+				val, ok := fixedValMap[int(colID)]
+				if !ok {
+					break
+				}
+				leftVals = append(leftVals, c.e.f.ConstructConstVal(val))
+				leftTypes = append(leftTypes, iter.index.Column(i).Column.DatumType())
+				zigzagJoin.LeftFixedCols = append(zigzagJoin.LeftFixedCols, colID)
+			}
+			for i, cnt := 0, iter2.index.ColumnCount(); i < cnt; i++ {
+				colID := scanPrivate.Table.ColumnID(iter2.index.Column(i).Ordinal)
+				val, ok := fixedValMap[int(colID)]
+				if !ok {
+					break
+				}
+				rightVals = append(rightVals, c.e.f.ConstructConstVal(val))
+				rightTypes = append(rightTypes, iter2.index.Column(i).Column.DatumType())
+				zigzagJoin.RightFixedCols = append(zigzagJoin.RightFixedCols, colID)
+			}
+			zigzagJoin.FixedVals[0] = c.e.f.ConstructTuple(leftVals, types.TTuple{Types: leftTypes})
+			zigzagJoin.FixedVals[1] = c.e.f.ConstructTuple(rightVals, types.TTuple{Types: rightTypes})
+
+			zigzagJoin.On = memo.ExtractRemainingJoinFilters(
+				filters,
+				zigzagJoin.LeftEqCols,
+				zigzagJoin.RightEqCols,
+			)
+
+			if scanPrivate.Cols.SubsetOf(iter.indexCols().Union(iter2.indexCols())) {
+				// Case 1 (see function comment).
+				c.e.mem.AddZigzagJoinToGroup(&zigzagJoin, grp)
+				continue
+			}
+
+			// Case 2 (see function comment).
+			if scanPrivate.Flags.NoIndexJoin {
+				continue
+			}
+
+			// TODO(itsbilal): Finish this
+			continue
+
+			/*
+				pkIndex := iter.tab.Index(opt.PrimaryIndex)
+				pkCols = make(opt.ColList, pkIndex.KeyColumnCount())
+				for i := range pkCols {
+					pkCols[i] = scanPrivate.Table.ColumnID(pkIndex.Column(i).Ordinal)
+				}
+
+				// The lower LookupJoin must return all PK columns (they are needed as key
+				// columns for the index join).
+				indexCols := iter.indexCols()
+				lookupJoin.Cols = scanPrivate.Cols.Intersection(indexCols)
+				for i := range pkCols {
+					lookupJoin.Cols.Add(int(pkCols[i]))
+				}
+				lookupJoin.Cols.UnionWith(inputProps.OutputCols)
+
+				var indexJoin memo.LookupJoinExpr
+
+				// onCols are the columns that the ON condition in the (lower) lookup join
+				// can refer to: input columns, or columns available in the index.
+				onCols := indexCols.Union(inputProps.OutputCols)
+				if c.FiltersBoundBy(lookupJoin.On, onCols) {
+					// The ON condition refers only to the columns available in the index.
+					//
+					// For LeftJoin, both LookupJoins perform a LeftJoin. A null-extended row
+					// from the lower LookupJoin will not have any matches in the top
+					// LookupJoin (it has NULLs on key columns) and will get null-extended
+					// there as well.
+					indexJoin.On = memo.TrueFilter
+				} else {
+					// ON has some conditions that are bound by the columns in the index (at
+					// the very least, the equality conditions we used for KeyCols), and some
+					// conditions that refer to other columns. We can put the former in the
+					// lower LookupJoin and the latter in the index join.
+					//
+					// This works for InnerJoin but not for LeftJoin because of a
+					// technicality: if an input (left) row has matches in the lower
+					// LookupJoin but has no matches in the index join, only the columns
+					// looked up by the top index join get NULL-extended.
+					if joinType == opt.LeftJoinOp {
+						// TODO(radu): support LeftJoin, perhaps by looking up all columns and
+						// discarding columns that are already available from the lower
+						// LookupJoin. This requires a projection to avoid having the same
+						// ColumnIDs on both sides of the index join.
+						continue
+					}
+					conditions := lookupJoin.On
+					lookupJoin.On = c.ExtractBoundConditions(conditions, onCols)
+					indexJoin.On = c.ExtractUnboundConditions(conditions, onCols)
+				}
+
+				indexJoin.Input = c.e.f.ConstructLookupJoin(
+					lookupJoin.Input,
+					lookupJoin.On,
+					&lookupJoin.LookupJoinPrivate,
+				)
+				indexJoin.JoinType = joinType
+				indexJoin.Table = scanPrivate.Table
+				indexJoin.Index = opt.PrimaryIndex
+				indexJoin.KeyCols = pkCols
+				indexJoin.Cols = scanPrivate.Cols.Union(inputProps.OutputCols)
+
+				// Create the LookupJoin for the index join in the same group.
+				c.e.mem.AddLookupJoinToGroup(&indexJoin, grp)
+			*/
+		}
 	}
 }
 
