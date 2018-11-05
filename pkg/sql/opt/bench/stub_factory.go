@@ -142,6 +142,23 @@ func (f *stubFactory) ConstructLookupJoin(
 	return struct{}{}, nil
 }
 
+func (f *stubFactory) ConstructZigzagJoin(
+	joinType sqlbase.JoinType,
+	leftTable opt.Table,
+	leftIndex opt.Index,
+	rightTable opt.Table,
+	rightIndex opt.Index,
+	leftEqCols []exec.ColumnOrdinal,
+	leftCols exec.ColumnOrdinalSet,
+	rightEqCols []exec.ColumnOrdinal,
+	rightCols exec.ColumnOrdinalSet,
+	onCond tree.TypedExpr,
+	fixedVals []exec.Node,
+	reqOrdering exec.OutputOrdering,
+) (exec.Node, error) {
+	return struct{}{}, nil
+}
+
 func (f *stubFactory) ConstructLimit(
 	input exec.Node, limit, offset tree.TypedExpr,
 ) (exec.Node, error) {

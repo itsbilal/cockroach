@@ -1197,3 +1197,48 @@ func TestCheckNodeHealth(t *testing.T) {
 		})
 	}
 }
+
+// TestZigzagNodePlanning tests the conversion of a zigzag node to
+func TestZigzagNodePlanning(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	s, db, cdb := serverutils.StartServer(
+		t, base.TestServerArgs{UseDatabase: "test"})
+	defer s.Stopper().Stop(context.TODO())
+
+	if _, err := db.Exec(`CREATE DATABASE IF NOT EXISTS test`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.Exec(`DROP TABLE IF EXISTS test.zjoin`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE test.zjoin (a INT PRIMARY KEY, b INT, c INT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE INDEX bidx ON test.zjoin (b)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE INDEX cidx ON test.zjoin (c)`); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString(`INSERT INTO test.zjoin VALUES `)
+	a := 0
+	for b := 0; b < 50; b++ {
+		for c := 0; c < 50; c++ {
+			if b+c > 0 {
+				buf.WriteString(", ")
+			}
+			fmt.Fprintf(&buf, "(%d, %d, %d)", a, b, c)
+			a++
+		}
+	}
+	if _, err := db.Exec(buf.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	tabledesc := sqlbase.GetTableDescriptor(cdb, "test", "zjoin")
+
+}

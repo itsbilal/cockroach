@@ -1019,6 +1019,16 @@ func newProcessor(
 			flowCtx, processorID, core.InterleavedReaderJoiner, post, outputs[0],
 		)
 	}
+	if core.ZigzagJoiner != nil {
+		if err := checkNumInOut(inputs, outputs, 0, 1); err != nil {
+			return nil, err
+		}
+		int1 := sqlbase.DatumToEncDatum(sqlbase.ColumnType{SemanticType: sqlbase.ColumnType_INT}, tree.NewDInt(tree.DInt(1)))
+		int2 := sqlbase.DatumToEncDatum(sqlbase.ColumnType{SemanticType: sqlbase.ColumnType_INT}, tree.NewDInt(tree.DInt(2)))
+		return newZigzagJoiner(
+			flowCtx, processorID, core.ZigzagJoiner, []sqlbase.EncDatumRow{{int1}, {int2}}, post, outputs[0],
+		)
+	}
 	if core.HashJoiner != nil {
 		if err := checkNumInOut(inputs, outputs, 2, 1); err != nil {
 			return nil, err
