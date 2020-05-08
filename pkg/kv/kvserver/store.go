@@ -2502,6 +2502,9 @@ func (s *Store) ComputeMetrics(ctx context.Context, tick int) error {
 	sstables := s.engine.GetSSTables()
 	s.metrics.RdbNumSSTables.Update(int64(sstables.Len()))
 	readAmp := sstables.ReadAmplification()
+	if stats.L0SublevelCount > 0 {
+		readAmp = int(stats.L0SublevelCount)
+	}
 	s.metrics.RdbReadAmplification.Update(int64(readAmp))
 	s.metrics.RdbPendingCompaction.Update(stats.PendingCompactionBytesEstimate)
 	// Log this metric infrequently (with current configurations,
