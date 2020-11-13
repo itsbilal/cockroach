@@ -59,6 +59,7 @@ func MVCCKeyCompare(a, b []byte) int {
 		// This should never happen unless there is some sort of corruption of
 		// the keys. This is a little bizarre, but the behavior exactly matches
 		// engine/db.cc:DBComparator.
+		panic(fmt.Sprintf("invalid mvcc keys: %v, %v", a, b))
 		return bytes.Compare(a, b)
 	}
 
@@ -149,6 +150,7 @@ var MVCCComparer = &pebble.Comparer{
 	Split: func(k []byte) int {
 		key, _, ok := enginepb.SplitMVCCKey(k)
 		if !ok {
+			panic(fmt.Sprintf("cannot split key: %v", k))
 			return len(k)
 		}
 		// This matches the behavior of libroach/KeyPrefix. RocksDB requires that
@@ -490,6 +492,12 @@ func NewPebble(ctx context.Context, cfg PebbleConfig) (*Pebble, error) {
 		ctx:   logCtx,
 		depth: 2, // skip over the EventListener stack frame
 	})
+
+	old_be := cfg.Opts.EventListener.BackgroundError
+	cfg.Opts.EventListener.BackgroundError = func(e error) {
+		old_be(e)
+		panic(fmt.Sprintf("background error from pebble: %s", e))
+	}
 
 	db, err := pebble.Open(cfg.StorageConfig.Dir, cfg.Opts)
 	if err != nil {
@@ -902,7 +910,9 @@ func (p *Pebble) PreIngestDelay(ctx context.Context) {
 
 // ApproximateDiskBytes implements the Engine interface.
 func (p *Pebble) ApproximateDiskBytes(from, to roachpb.Key) (uint64, error) {
-	count, err := p.db.EstimateDiskUsage(from, to)
+	fromKey := EncodeKey(MakeMVCCMetadataKey(from))
+	toKey := EncodeKey(MakeMVCCMetadataKey(to))
+	count, err := p.db.EstimateDiskUsage(fromKey, toKey)
 	if err != nil {
 		return 0, err
 	}
