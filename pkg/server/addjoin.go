@@ -13,13 +13,11 @@ package server
 import (
 	"context"
 
-	"github.com/cockroachdb/errors"
-
-	"google.golang.org/grpc"
-
 	"github.com/cockroachdb/cockroach/pkg/server/serverpb"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
+	"github.com/cockroachdb/errors"
 	"github.com/google/uuid"
+	"google.golang.org/grpc"
 )
 
 // JoinToken is a container for a TokenID and associated SharedSecret for use
