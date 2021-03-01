@@ -47,6 +47,16 @@ func (a kvAuth) AuthStream() grpc.StreamServerInterceptor { return a.streamInter
 func (a kvAuth) unaryInterceptor(
 	ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler,
 ) (interface{}, error) {
+	// TODO(aaron-crl)
+	// use info.FullMethod to bypass the authenticate call below when the join RPC
+	// is being accessed.
+	//
+	// (Probably non-relevant:)
+	// You can pass data from this code here to the handler in server/addjoin.go
+	// via the ctx variable, like this:
+	// ctx = wrapCtx(ctx) // see context package for ways to annotate a context
+	// return handler(ctx, req)
+
 	tenID, err := a.authenticate(ctx)
 	if err != nil {
 		return nil, err
