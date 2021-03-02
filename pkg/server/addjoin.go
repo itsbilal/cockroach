@@ -12,22 +12,59 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 
+	"github.com/cockroachdb/cockroach/pkg/security"
 	"github.com/cockroachdb/cockroach/pkg/server/serverpb"
+	"github.com/cockroachdb/errors"
 )
 
 // RequestCA makes it possible for a node to request the node-to-node CA certificate.
 func (s *adminServer) RequestCA(
 	ctx context.Context, req *serverpb.CaRequest,
 ) (*serverpb.CaResponse, error) {
-	// TODO(aaron-crl): you can pluck data out of ctx from the authentication layer.
+	cl := security.MakeCertsLocator(s.server.cfg.SSLCertsDir)
+	caCert, err := loadCertificateFile(cl.CACertPath())
+	if err != nil {
+		return nil, errors.Wrapf(
+			err,
+			"failed to read inter-node cert from disk at %q ",
+			cl.CACertPath(),
+		)
+	}
 
-	return nil, nil
+	res := &serverpb.CaResponse{
+		CaCert: caCert,
+	}
+	return res, nil
 }
 
 // RequestCertBundle makes it possible for a node to request its TLS certs from another node.
 func (s *adminServer) RequestCertBundle(
 	ctx context.Context, req *serverpb.BundleRequest,
 ) (*serverpb.BundleResponse, error) {
-	return nil, nil
+	// TODO(aaron-crl): Validate token sharedSecret is valid.
+
+	certBundle, err := collectLocalCABundle(s.server.cfg.SSLCertsDir)
+	if err != nil {
+		return nil, errors.Wrapf(
+			err,
+			"failed to collect LocalCABundle",
+			err,
+		)
+	}
+
+	bundleBytes, err := json.Marshal(certBundle)
+	if err != nil {
+		return nil, errors.Wrapf(
+			err,
+			"failed to marshal LocalCABundle",
+			err,
+		)
+	}
+
+	res := &serverpb.BundleResponse{
+		Bundle: bundleBytes,
+	}
+	return res, nil
 }

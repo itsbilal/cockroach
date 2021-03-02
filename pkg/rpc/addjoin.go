@@ -11,17 +11,19 @@
 package rpc
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"math"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
+	"google.golang.org/grpc/credentials"
 )
-
-/// TODO(aaron-crl): This needs to be in an exported function in package pkg/rpc because it needs access to non-exported snappyCompressor.
 
 // GetAddJoinDialOptions returns a standard list of DialOptions for use during
 // Add/Join operations.
-func GetAddJoinDialOptions() []grpc.DialOption {
+// TODO(aaron-crl): Possibly fold this into context.go
+func GetAddJoinDialOptions(certPool *x509.CertPool) []grpc.DialOption {
 	// Populate the dialOpts.
 	var dialOpts []grpc.DialOption
 
@@ -41,6 +43,21 @@ func GetAddJoinDialOptions() []grpc.DialOption {
 	dialOpts = append(dialOpts,
 		grpc.WithInitialWindowSize(initialWindowSize),
 		grpc.WithInitialConnWindowSize(initialConnWindowSize))
+
+	// Create a tls.Config that allows insecure mode if certPool is not set but
+	// requires it if certPool is set.
+	var tlsConf tls.Config
+	if certPool != nil {
+		tlsConf = tls.Config{
+			RootCAs: certPool,
+		}
+	} else {
+		// connect to HTTPS endpoint unverified (effectively HTTP) for CA
+		tlsConf = tls.Config{InsecureSkipVerify: true}
+	}
+
+	creds := credentials.NewTLS(&tlsConf)
+	dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
 
 	return dialOpts
 }

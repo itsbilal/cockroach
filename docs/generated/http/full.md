@@ -2854,7 +2854,6 @@ CaResponse contains a PEM encoded copy of the CA cert for this service.
 | Field | Type | Label | Description | Support status |
 | ----- | ---- | ----- | ----------- | -------------- |
 | ca_cert | [bytes](#cockroach.server.serverpb.CaResponse-bytes) |  | query is the SQL query string. | [reserved](#support-status) |
-| mac | [bytes](#cockroach.server.serverpb.CaResponse-bytes) |  |  | [reserved](#support-status) |
 
 
 

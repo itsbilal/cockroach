@@ -12,7 +12,6 @@ package rpc
 
 import (
 	"context"
-	"log"
 
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security"
@@ -48,16 +47,14 @@ func (a kvAuth) AuthStream() grpc.StreamServerInterceptor { return a.streamInter
 func (a kvAuth) unaryInterceptor(
 	ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler,
 ) (interface{}, error) {
-	// TODO(aaron-crl)
-	// use info.FullMethod to bypass the authenticate call below when the join RPC
-	// is being accessed.
-	log.Printf("// TODO(aaron-crl): %q\n", info.FullMethod)
-	//
-	// (Probably non-relevant:)
-	// You can pass data from this code here to the handler in server/addjoin.go
-	// via the ctx variable, like this:
-	// ctx = wrapCtx(ctx) // see context package for ways to annotate a context
-	// return handler(ctx, req)
+	// Allow unauthenticated requests for the inter-node CA public key as part
+	// of the Add/Join protocol. RFC: https://github.com/cockroachdb/cockroach/pull/51991
+	if info.FullMethod == "/cockroach.server.serverpb.Admin/RequestCA" {
+		return handler(ctx, req)
+	}
+	if info.FullMethod == "/cockroach.server.serverpb.Admin/RequestCertBundle" {
+		return handler(ctx, req)
+	}
 
 	tenID, err := a.authenticate(ctx)
 	if err != nil {

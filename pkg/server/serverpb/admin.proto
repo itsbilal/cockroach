@@ -722,7 +722,6 @@ message CaRequest {
 message CaResponse {
   // query is the SQL query string.
   bytes ca_cert = 1;
-  bytes mac = 2 [(gogoproto.customname) = "MAC"];
 }
 
 // BundleRequest requests the bundle of initialization CAs for a new node.

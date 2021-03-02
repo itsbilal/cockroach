@@ -12,8 +12,14 @@ package cli
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+
+	"github.com/cockroachdb/errors"
 
 	"github.com/cockroachdb/cockroach/pkg/rpc"
+	"github.com/cockroachdb/cockroach/pkg/server"
 	"github.com/cockroachdb/cockroach/pkg/server/serverpb"
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/spf13/cobra"
@@ -76,7 +82,7 @@ func runNodeJoin(cmd *cobra.Command, args []string) error {
 
 	var dialOpts []grpc.DialOption
 	// TODO(aaron-crl): Return to work here.
-	dialOpts = rpc.GetAddJoinDialOptions()
+	dialOpts = rpc.GetAddJoinDialOptions(nil)
 
 	conn, err := grpc.DialContext(ctx, peerAddr, dialOpts...)
 	if err != nil {
@@ -93,7 +99,71 @@ func runNodeJoin(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	_ = resp
+	// Verify that the received bytes match our expected MAC.
+	// TODO(aaron-crl): Implement this.
+
+	// Parse them to an x509.Certificate then add them to a pool.
+	pemBlock, _ := pem.Decode(resp.CaCert)
+	if pemBlock == nil {
+		return errors.New("failed to parse valid PEM from resp.CaCert")
+	}
+	cert, err := x509.ParseCertificate(pemBlock.Bytes)
+	if err != nil {
+		return errors.New("failed to parse valid x509 cert from resp.CaCert")
+	}
+	certPool := x509.NewCertPool()
+	certPool.AddCert(cert)
+
+	// TODO(aaron-crl): Handle this error.
+	certBundle, err := requestCertBundle(ctx, peerAddr, certPool)
+	if err != nil {
+		return err
+	}
+
+	// Use the bundle to initialize the node.
+	err = certBundle.InitializeNodeFromBundle(ctx, *baseCfg)
+	if err != nil {
+		return errors.Wrap(
+			err,
+			"failed to initialize node after consuming join-token",
+		)
+	}
 
 	return nil
+}
+
+func requestCertBundle(
+	ctx context.Context, peerAddr string, certPool *x509.CertPool,
+) (*server.CertificateBundle, error) {
+	// TODO(aaron-crl): Return to work here.
+	var dialOpts []grpc.DialOption
+	dialOpts = rpc.GetAddJoinDialOptions(certPool)
+
+	conn, err := grpc.DialContext(ctx, peerAddr, dialOpts...)
+	if err != nil {
+		return nil, err
+	}
+
+	s := serverpb.NewAdminClient(conn)
+	req := serverpb.BundleRequest{}
+	resp, err := s.RequestCertBundle(ctx, &req)
+	if err != nil {
+		return nil, errors.Wrapf(
+			err,
+			"failed to RequestCertBundle from %q",
+			peerAddr,
+		)
+	}
+
+	var certBundle server.CertificateBundle
+	err = json.Unmarshal(resp.Bundle, &certBundle)
+	if err != nil {
+		return nil, errors.Wrapf(
+			err,
+			"failed to unmarshal CertBundle from %q",
+			peerAddr,
+		)
+	}
+
+	return &certBundle, nil
 }
