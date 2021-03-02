@@ -12,6 +12,7 @@ package rpc
 
 import (
 	"context"
+	"log"
 
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security"
@@ -50,6 +51,7 @@ func (a kvAuth) unaryInterceptor(
 	// TODO(aaron-crl)
 	// use info.FullMethod to bypass the authenticate call below when the join RPC
 	// is being accessed.
+	log.Printf("// TODO(aaron-crl): %q\n", info.FullMethod)
 	//
 	// (Probably non-relevant:)
 	// You can pass data from this code here to the handler in server/addjoin.go

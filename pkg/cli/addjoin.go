@@ -12,13 +12,12 @@ package cli
 
 import (
 	"context"
-	"math"
 
+	"github.com/cockroachdb/cockroach/pkg/rpc"
 	"github.com/cockroachdb/cockroach/pkg/server/serverpb"
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/backoff"
 )
 
 var nodeJoinCmd = &cobra.Command{
@@ -76,29 +75,8 @@ func runNodeJoin(cmd *cobra.Command, args []string) error {
 	peerAddr := args[0]
 
 	var dialOpts []grpc.DialOption
-
-	{
-		// Populate the dialOpts.
-
-		/// This needs to be in an exported function in package pkg/rpc because it needs access to non-exported snappyCompressor.
-
-		// Populate a valid tlsConfig here
-		// dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
-
-		dialOpts = append(dialOpts, grpc.WithDefaultCallOptions(
-			grpc.MaxCallRecvMsgSize(math.MaxInt32),
-			grpc.MaxCallSendMsgSize(math.MaxInt32),
-		))
-		dialOpts = append(dialOpts, grpc.WithDefaultCallOptions(grpc.UseCompressor((snappyCompressor{}).Name())))
-		dialOpts = append(dialOpts, grpc.WithNoProxy())
-		backoffConfig := backoff.DefaultConfig
-		backoffConfig.MaxDelay = maxBackoff
-		dialOpts = append(dialOpts, grpc.WithConnectParams(grpc.ConnectParams{Backoff: backoffConfig}))
-		dialOpts = append(dialOpts, grpc.WithKeepaliveParams(clientKeepalive))
-		dialOpts = append(dialOpts,
-			grpc.WithInitialWindowSize(initialWindowSize),
-			grpc.WithInitialConnWindowSize(initialConnWindowSize))
-	}
+	// TODO(aaron-crl): Return to work here.
+	dialOpts = rpc.GetAddJoinDialOptions()
 
 	conn, err := grpc.DialContext(ctx, peerAddr, dialOpts...)
 	if err != nil {
