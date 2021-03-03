@@ -16,12 +16,12 @@ import (
 	"encoding/json"
 	"encoding/pem"
 
+	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/errors"
 
 	"github.com/cockroachdb/cockroach/pkg/rpc"
 	"github.com/cockroachdb/cockroach/pkg/server"
 	"github.com/cockroachdb/cockroach/pkg/server/serverpb"
-	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 )
@@ -33,14 +33,7 @@ var nodeJoinCmd = &cobra.Command{
 	RunE:  MaybeDecorateGRPCError(runNodeJoin),
 }
 
-// JoinToken is a container for a TokenID and associated SharedSecret for use
-// in certificate-free add/join operations.
-type JoinToken struct {
-	TokenID      uuid.UUID
-	SharedSecret []byte
-}
-
-func requestPeerCA(ctx context.Context, peer string, jt JoinToken) ([]byte, error) {
+func requestPeerCA(ctx context.Context, peer string, jt sql.JoinToken) ([]byte, error) {
 	return nil, nil
 	//dialOpts, err := ctx.GRPCDialOptions
 	//if err != nil {

@@ -140,7 +140,7 @@ type sqlServerOptionalKVArgs struct {
 	nodeLiveness optionalnodeliveness.Container
 	// Gossip is relied upon by distSQLCfg (execinfra.ServerConfig), the executor
 	// config, the DistSQL planner, the table statistics cache, the statements
-	// diagnostics registry, and the lease manager.
+	// diagnostics registry, the lease manager, and the TLS node joiner.
 	gossip gossip.OptionalGossip
 	// To register blob and DistSQL servers.
 	grpcServer *grpc.Server

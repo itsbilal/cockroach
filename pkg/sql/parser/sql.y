@@ -3141,6 +3141,7 @@ create_stmt:
 | create_replication_stream_stmt
 | create_extension_stmt  // EXTEND WITH HELP: CREATE EXTENSION
 | create_unsupported   {}
+| create_join_token_stmt // help text to be added after feature flag removed
 | CREATE error         // SHOW HELP: CREATE
 
 // %Help: CREATE EXTENSION
@@ -3393,6 +3394,13 @@ create_replication_stream_stmt:
       SinkURI: $6.expr(),
       Options: *$7.replicationOptions(),
     }
+  }
+
+// Create join token statement. Help text to come when feature flag is dropped.
+create_join_token_stmt:
+  CREATE JOIN TOKEN
+  {
+    $$.val = &tree.CreateJoinToken{}
   }
 
 // Optional replication stream options.
