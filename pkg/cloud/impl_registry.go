@@ -30,6 +30,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/metric"
 	"github.com/cockroachdb/cockroach/pkg/util/quotapool"
 	"github.com/cockroachdb/errors"
+	"github.com/cockroachdb/pebble/vfs"
 )
 
 // redactedQueryParams is the set of query parameter names registered by the
@@ -161,6 +162,27 @@ func ExternalStorageFromURI(
 	}
 	return MakeExternalStorage(ctx, conf, externalConfig, settings, blobClientFactory,
 		db, limiters, metrics, opts...)
+}
+
+// ExternalStorageFromURI returns a vfs.FS for the given URI.
+func VFSExternalStorageFromURI(
+	ctx context.Context,
+	uri string,
+	externalConfig base.ExternalIODirConfig,
+	settings *cluster.Settings,
+	blobClientFactory blobs.BlobClientFactory,
+	user security.SQLUsername,
+	ie sqlutil.InternalExecutor,
+	kvDB *kv.DB,
+) (vfs.FS, error) {
+	es, err := ExternalStorageFromURI(ctx, uri, externalConfig, settings, blobClientFactory, user, ie, kvDB)
+	if err != nil {
+		return nil, err
+	}
+	return &vfsAdapter{
+		ExternalStorage: es,
+		ctx:             ctx,
+	}, nil
 }
 
 // SanitizeExternalStorageURI returns the external storage URI with with some
