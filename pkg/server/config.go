@@ -693,6 +693,7 @@ func (cfg *Config) CreateEngines(ctx context.Context) (Engines, error) {
 	}
 
 	var sharedStorage vfs.FS
+
 	var sharedPath string
 	if cfg.SharedStorage != "" {
 		var err error
@@ -701,7 +702,7 @@ func (cfg *Config) CreateEngines(ctx context.Context) (Engines, error) {
 			sharedStorage = vfs.Default
 			sharedPath = strings.TrimPrefix(sharedPath, "file://")
 		} else {
-			sharedStorage, err = cloud.VFSExternalStorageFromURI(ctx, sharedPath, cfg.ExternalIODirConfig, cfg.Settings, nil, cfg.User, nil, nil)
+			sharedStorage, err = cloud.VFSExternalStorageFromURI(ctx, sharedPath, cfg.ExternalIODirConfig, cfg.Settings, nil, cfg.User, nil, nil, nil, nil)
 			sharedPath = ""
 		}
 		if err != nil {
@@ -713,6 +714,7 @@ func (cfg *Config) CreateEngines(ctx context.Context) (Engines, error) {
 		//}
 		//pebbleCache.AddSecondaryCache(cachePath, vfs.Default.(vfs.FSWithOpenForWrites), 16<<30)
 	}
+
 	rand, _ := randutil.NewPseudoRand()
 	for i, spec := range cfg.Stores.Specs {
 		log.Eventf(ctx, "initializing %+v", spec)
@@ -805,7 +807,7 @@ func (cfg *Config) CreateEngines(ctx context.Context) (Engines, error) {
 			if sharedStorage != nil {
 				pebbleConfig.Opts.SharedFS = sharedStorage
 				pebbleConfig.Opts.SharedDir = sharedPath
-				pebbleConfig.Opts.UniqueID = uint16(rand.Intn(math.MaxUint16))
+				pebbleConfig.Opts.UniqueID = uint32(rand.Intn(math.MaxUint32))
 			}
 			pebbleConfig.Opts.Cache = pebbleCache
 			pebbleConfig.Opts.TableCache = tableCache

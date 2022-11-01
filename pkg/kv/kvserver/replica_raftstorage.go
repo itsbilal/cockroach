@@ -330,6 +330,7 @@ type IncomingSnapshot struct {
 	// The descriptor in the snapshot, never nil.
 	Desc             *roachpb.RangeDescriptor
 	DataSize         int64
+	SharedSSTs       []kvserverpb.SnapshotRequest_SharedSST
 	snapType         kvserverpb.SnapshotRequest_Type
 	placeholder      *ReplicaPlaceholder
 	raftAppliedIndex uint64 // logging only
@@ -653,8 +654,19 @@ func (r *Replica) applySnapshot(
 		}
 	}
 	var ingestStats pebble.IngestOperationStats
+	var sharedSSTs []pebble.SharedSSTMeta
+	for i := range inSnap.SharedSSTs {
+		sharedSSTs = append(sharedSSTs, pebble.SharedSSTMeta{
+			CreatorUniqueID: inSnap.SharedSSTs[i].CreatorUniqueId,
+			PhysicalFileNum: inSnap.SharedSSTs[i].FileNum,
+			Smallest:        inSnap.SharedSSTs[i].Smallest,
+			Largest:         inSnap.SharedSSTs[i].Largest,
+			FileSmallest:    inSnap.SharedSSTs[i].PhysicalSmallest,
+			FileLargest:     inSnap.SharedSSTs[i].PhysicalLargest,
+		})
+	}
 	if ingestStats, err =
-		r.store.engine.IngestExternalFilesWithStats(ctx, inSnap.SSTStorageScratch.SSTs()); err != nil {
+		r.store.engine.IngestExternalFilesWithStats(ctx, inSnap.SSTStorageScratch.SSTs(), sharedSSTs); err != nil {
 		return errors.Wrapf(err, "while ingesting %s", inSnap.SSTStorageScratch.SSTs())
 	}
 	if r.store.cfg.KVAdmissionController != nil {

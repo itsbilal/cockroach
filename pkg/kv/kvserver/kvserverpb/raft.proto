@@ -219,12 +219,25 @@ message SnapshotRequest {
     reserved 1, 4;
   }
 
+  // SharedSST is an SSTable in blob storagethat contains part of this snapshot.
+  message SharedSST {
+    uint32 creator_unique_id = 1;
+    uint64 file_num = 2;
+
+    bytes smallest = 3;
+    bytes largest = 4;
+    bytes physical_smallest = 5;
+    bytes physical_largest = 6;
+  }
+
   Header header = 1;
 
   // A RocksDB BatchRepr. Multiple kv_batches may be sent across multiple request messages.
   bytes kv_batch = 2 [(gogoproto.customname) = "KVBatch"];
 
   bool final = 4;
+
+  repeated SharedSST shared_ssts = 5 [(gogoproto.nullable) = true];
 
   reserved 3;
 }

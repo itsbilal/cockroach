@@ -930,7 +930,7 @@ type Engine interface {
 	// IngestExternalFilesWithStats is a variant of IngestExternalFiles that
 	// additionally returns ingestion stats.
 	IngestExternalFilesWithStats(
-		ctx context.Context, paths []string) (pebble.IngestOperationStats, error)
+		ctx context.Context, paths []string, sharedSSTs []pebble.SharedSSTMeta) (pebble.IngestOperationStats, error)
 	// PreIngestDelay offers an engine the chance to backpressure ingestions.
 	// When called, it may choose to block if the engine determines that it is in
 	// or approaching a state where further ingestions may risk its health.

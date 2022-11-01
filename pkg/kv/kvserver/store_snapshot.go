@@ -13,6 +13,7 @@ package kvserver
 import (
 	"context"
 	"io"
+	"sort"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
@@ -407,6 +408,7 @@ func (kvSS *kvBatchSnapshotStrategy) Receive(
 	defer msstw.Close()
 
 	log.Event(ctx, "waiting for snapshot batches to begin")
+	var sharedSSTs []kvserverpb.SnapshotRequest_SharedSST
 
 	for {
 		timingTag.start("recv")
@@ -466,6 +468,9 @@ func (kvSS *kvBatchSnapshotStrategy) Receive(
 			}
 			timingTag.stop("sst")
 		}
+		for _, sst := range req.SharedSsts {
+			sharedSSTs = append(sharedSSTs, *sst)
+		}
 		if req.Final {
 			// We finished receiving all batches and log entries. It's possible that
 			// we did not receive any key-value pairs for some of the key spans, but
@@ -477,6 +482,20 @@ func (kvSS *kvBatchSnapshotStrategy) Receive(
 				return noSnap, errors.Wrapf(err, "finishing sst for raft snapshot")
 			}
 			msstw.Close()
+			if len(sharedSSTs) > 0 {
+				// Sort and dedup sharedSSTs.
+				sort.Slice(sharedSSTs, func(i, j int) bool {
+					return sharedSSTs[i].FileNum < sharedSSTs[j].FileNum
+				})
+				j := 0
+				for i := range sharedSSTs {
+					if j == 0 || sharedSSTs[j-1].FileNum != sharedSSTs[i].FileNum {
+						sharedSSTs[j] = sharedSSTs[i]
+						j++
+					}
+				}
+				sharedSSTs = sharedSSTs[:j]
+			}
 			timingTag.stop("sst")
 			log.Eventf(ctx, "all data received from snapshot and all SSTs were finalized")
 
@@ -492,6 +511,7 @@ func (kvSS *kvBatchSnapshotStrategy) Receive(
 				FromReplica:       header.RaftMessageRequest.FromReplica,
 				Desc:              header.State.Desc,
 				DataSize:          dataSize,
+				SharedSSTs:        sharedSSTs,
 				snapType:          header.Type,
 				raftAppliedIndex:  header.State.RaftAppliedIndex,
 			}

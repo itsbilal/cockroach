@@ -1726,14 +1726,14 @@ func (p *Pebble) Type() enginepb.EngineType {
 
 // IngestExternalFiles implements the Engine interface.
 func (p *Pebble) IngestExternalFiles(ctx context.Context, paths []string) error {
-	return p.db.Ingest(paths)
+	return p.db.Ingest(paths, nil)
 }
 
 // IngestExternalFilesWithStats implements the Engine interface.
 func (p *Pebble) IngestExternalFilesWithStats(
-	ctx context.Context, paths []string,
+	ctx context.Context, paths []string, sharedSSTs []pebble.SharedSSTMeta,
 ) (pebble.IngestOperationStats, error) {
-	return p.db.IngestWithStats(paths)
+	return p.db.IngestWithStats(paths, sharedSSTs)
 }
 
 // PreIngestDelay implements the Engine interface.
