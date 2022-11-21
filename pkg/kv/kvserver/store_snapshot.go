@@ -40,6 +40,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/tracing/tracingpb"
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/cockroachdb/errors"
+	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/redact"
 	"go.etcd.io/raft/v3/raftpb"
 	"go.opentelemetry.io/otel/attribute"
@@ -563,6 +564,7 @@ func (kvSS *kvBatchSnapshotStrategy) Send(
 	// Iterate over all keys (point keys and range keys) and stream out batches of
 	// key-values.
 	var b storage.Batch
+	var sharedSSTs []*kvserverpb.SnapshotRequest_SharedSST
 	defer func() {
 		if b != nil {
 			b.Close()
@@ -570,7 +572,7 @@ func (kvSS *kvBatchSnapshotStrategy) Send(
 	}()
 
 	flushBatch := func() error {
-		if err := kvSS.sendBatch(ctx, stream, b, timingTag); err != nil {
+		if err := kvSS.sendBatch(ctx, stream, b, timingTag, sharedSSTs); err != nil {
 			return err
 		}
 		bLen := int64(b.Len())
@@ -588,7 +590,8 @@ func (kvSS *kvBatchSnapshotStrategy) Send(
 		return nil
 	}
 
-	err := rditer.IterateReplicaKeySpans(snap.State.Desc, snap.EngineSnap, true, /* replicatedOnly */
+	skipShared := header.SenderQueueName == kvserverpb.SnapshotRequest_REPLICATE_QUEUE
+	err := rditer.IterateReplicaKeySpansShared(snap.State.Desc, snap.EngineSnap, true /* replicatedOnly */, skipShared, /* skipShared */
 		func(iter storage.EngineIterator, _ roachpb.Span, keyType storage.IterKeyType) error {
 			timingTag.start("iter")
 			defer timingTag.stop("iter")
@@ -642,6 +645,16 @@ func (kvSS *kvBatchSnapshotStrategy) Send(
 				return errors.AssertionFailedf("unexpected key type %v", keyType)
 			}
 			return err
+		}, func(_ roachpb.Span, meta pebble.SharedSSTMeta) {
+			sstMeta := &kvserverpb.SnapshotRequest_SharedSST{
+				CreatorUniqueId:  meta.CreatorUniqueID,
+				FileNum:          meta.PhysicalFileNum,
+				Smallest:         meta.Smallest,
+				Largest:          meta.Largest,
+				PhysicalSmallest: meta.FileSmallest,
+				PhysicalLargest:  meta.FileLargest,
+			}
+			sharedSSTs = append(sharedSSTs, sstMeta)
 		})
 	if err != nil {
 		return 0, err
@@ -664,6 +677,7 @@ func (kvSS *kvBatchSnapshotStrategy) sendBatch(
 	stream outgoingSnapshotStream,
 	batch storage.Batch,
 	timerTag *snapshotTimingTag,
+	sharedSSTs []*kvserverpb.SnapshotRequest_SharedSST,
 ) error {
 	timerTag.start("rateLimit")
 	err := kvSS.limiter.WaitN(ctx, 1)
@@ -672,7 +686,7 @@ func (kvSS *kvBatchSnapshotStrategy) sendBatch(
 		return err
 	}
 	timerTag.start("send")
-	res := stream.Send(&kvserverpb.SnapshotRequest{KVBatch: batch.Repr()})
+	res := stream.Send(&kvserverpb.SnapshotRequest{KVBatch: batch.Repr(), SharedSsts: sharedSSTs})
 	timerTag.stop("send")
 	return res
 }

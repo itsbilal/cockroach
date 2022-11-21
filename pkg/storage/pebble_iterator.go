@@ -230,6 +230,8 @@ func (p *pebbleIterator) setOptions(opts IterOptions, durability DurabilityRequi
 		OnlyReadGuaranteedDurable: durability == GuaranteedDurability,
 		KeyTypes:                  opts.KeyTypes,
 		UseL6Filters:              opts.useL6Filters,
+		SkipSharedFile:            opts.SkipSharedFile,
+		SharedFileCallback:        opts.SharedFileCallback,
 	}
 	p.prefix = opts.Prefix
 

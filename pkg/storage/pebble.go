@@ -1733,7 +1733,12 @@ func (p *Pebble) IngestExternalFiles(ctx context.Context, paths []string) error 
 func (p *Pebble) IngestExternalFilesWithStats(
 	ctx context.Context, paths []string, sharedSSTs []pebble.SharedSSTMeta,
 ) (pebble.IngestOperationStats, error) {
-	return p.db.IngestWithStats(paths, sharedSSTs)
+	if len(sharedSSTs) != 0 {
+		if err := p.db.Ingest(nil, sharedSSTs); err != nil {
+			return pebble.IngestOperationStats{}, err
+		}
+	}
+	return p.db.IngestWithStats(paths, nil)
 }
 
 // PreIngestDelay implements the Engine interface.

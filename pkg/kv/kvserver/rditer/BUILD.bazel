@@ -16,6 +16,7 @@ go_library(
         "//pkg/storage",
         "//pkg/storage/enginepb",
         "//pkg/util/iterutil",
+        "@com_github_cockroachdb_pebble//:pebble",
     ],
 )
 

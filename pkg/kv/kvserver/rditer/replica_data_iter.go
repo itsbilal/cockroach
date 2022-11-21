@@ -15,6 +15,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/storage"
 	"github.com/cockroachdb/cockroach/pkg/util/iterutil"
+	"github.com/cockroachdb/pebble"
 )
 
 // ReplicaDataIteratorOptions defines ReplicaMVCCDataIterator creation options.
@@ -411,6 +412,53 @@ func IterateMVCCReplicaKeySpans(
 				}
 				return err
 			}()
+			if err != nil {
+				return iterutil.Map(err)
+			}
+		}
+	}
+	return nil
+}
+
+// IterateReplicaKeySpansShared TODO
+func IterateReplicaKeySpansShared(
+	desc *roachpb.RangeDescriptor,
+	reader storage.Reader,
+	replicatedOnly bool,
+	skipShared bool,
+	visitor func(storage.EngineIterator, roachpb.Span, storage.IterKeyType) error,
+	skippedSST func(roachpb.Span, pebble.SharedSSTMeta),
+) error {
+	if !skipShared {
+		return IterateReplicaKeySpans(desc, reader, replicatedOnly, visitor)
+	}
+	if !reader.ConsistentIterators() {
+		panic("reader must provide consistent iterators")
+	}
+	var spans []roachpb.Span
+	if replicatedOnly {
+		spans = MakeReplicatedKeySpans(desc)
+	} else {
+		spans = MakeAllKeySpans(desc)
+	}
+	keyTypes := []storage.IterKeyType{storage.IterKeyTypePointsOnly, storage.IterKeyTypeRangesOnly}
+	for _, span := range spans {
+		for _, keyType := range keyTypes {
+			iter := reader.NewEngineIterator(storage.IterOptions{
+				KeyTypes:       keyType,
+				LowerBound:     span.Key,
+				UpperBound:     span.EndKey,
+				SkipSharedFile: true,
+				SharedFileCallback: func(meta pebble.SharedSSTMeta) {
+					span := span
+					skippedSST(span, meta)
+				},
+			})
+			ok, err := iter.SeekEngineKeyGE(storage.EngineKey{Key: span.Key})
+			if err == nil && ok {
+				err = visitor(iter, span, keyType)
+			}
+			iter.Close()
 			if err != nil {
 				return iterutil.Map(err)
 			}

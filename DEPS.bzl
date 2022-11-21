@@ -1506,7 +1506,7 @@ def go_deps():
             "@com_github_cockroachdb_cockroach//build/patches:com_github_cockroachdb_pebble.patch",
         ],
         vcs = "git",
-        remote = "/Users/bilal/go/src/github.com/cockroachdb/pebble",  # Custom fork.
+        remote = "https://github.com/itsbilal/pebble",  # Custom fork.
         commit = "beccab2f6d630f52f9013a62a457a2668a8ab231",  # Custom commit.
     )
     go_repository(
