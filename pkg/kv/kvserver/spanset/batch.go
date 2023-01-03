@@ -424,6 +424,10 @@ type spanSetReader struct {
 	ts        hlc.Timestamp
 }
 
+func (s spanSetReader) NewEngineInternalIterator(opts storage.IterOptions) storage.InternalMVCCIterator {
+	return s.r.NewEngineInternalIterator(opts)
+}
+
 var _ storage.Reader = spanSetReader{}
 
 func (s spanSetReader) Close() {
@@ -491,6 +495,10 @@ type spanSetWriter struct {
 
 	spansOnly bool
 	ts        hlc.Timestamp
+}
+
+func (s spanSetWriter) PutInternalKey(key pebble.InternalKey, value []byte) error {
+	return s.w.PutInternalKey(key, value)
 }
 
 var _ storage.Writer = spanSetWriter{}

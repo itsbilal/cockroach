@@ -321,6 +321,7 @@ func IterateReplicaKeySpans(
 	desc *roachpb.RangeDescriptor,
 	reader storage.Reader,
 	replicatedOnly bool,
+	noUserKeys bool,
 	visitor func(storage.EngineIterator, roachpb.Span, storage.IterKeyType) error,
 ) error {
 	if !reader.ConsistentIterators() {
@@ -329,6 +330,9 @@ func IterateReplicaKeySpans(
 	var spans []roachpb.Span
 	if replicatedOnly {
 		spans = MakeReplicatedKeySpans(desc)
+		if noUserKeys {
+			spans = spans[:len(spans)-1]
+		}
 	} else {
 		spans = makeAllKeySpans(desc)
 	}
@@ -424,27 +428,17 @@ func IterateMVCCReplicaKeySpans(
 func IterateReplicaKeySpansShared(
 	desc *roachpb.RangeDescriptor,
 	reader storage.Reader,
-	replicatedOnly bool,
-	skipShared bool,
-	visitor func(storage.EngineIterator, roachpb.Span, storage.IterKeyType) error,
+	visitor func(storage.InternalMVCCIterator, roachpb.Span, storage.IterKeyType) error,
 	skippedSST func(roachpb.Span, pebble.SharedSSTMeta),
 ) error {
-	if !skipShared {
-		return IterateReplicaKeySpans(desc, reader, replicatedOnly, visitor)
-	}
 	if !reader.ConsistentIterators() {
 		panic("reader must provide consistent iterators")
 	}
-	var spans []roachpb.Span
-	if replicatedOnly {
-		spans = MakeReplicatedKeySpans(desc)
-	} else {
-		spans = MakeAllKeySpans(desc)
-	}
-	keyTypes := []storage.IterKeyType{storage.IterKeyTypePointsOnly, storage.IterKeyTypeRangesOnly}
+	spans := []roachpb.Span{desc.KeySpan().AsRawSpanWithNoLocals()}
+	keyTypes := []storage.IterKeyType{storage.IterKeyTypePointsOnly}
 	for _, span := range spans {
 		for _, keyType := range keyTypes {
-			iter := reader.NewEngineIterator(storage.IterOptions{
+			iter := reader.NewEngineInternalIterator(storage.IterOptions{
 				KeyTypes:       keyType,
 				LowerBound:     span.Key,
 				UpperBound:     span.EndKey,
@@ -454,8 +448,9 @@ func IterateReplicaKeySpansShared(
 					skippedSST(span, meta)
 				},
 			})
-			ok, err := iter.SeekEngineKeyGE(storage.EngineKey{Key: span.Key})
-			if err == nil && ok {
+			iter.SeekEngineKeyGE(storage.EngineKey{Key: span.Key})
+			ok, err := iter.Valid()
+			if ok {
 				err = visitor(iter, span, keyType)
 			}
 			iter.Close()

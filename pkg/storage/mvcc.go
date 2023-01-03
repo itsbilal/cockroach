@@ -87,7 +87,7 @@ var MVCCRangeTombstonesEnabled = settings.RegisterBoolSetting(
 	settings.TenantReadOnly,
 	"storage.mvcc.range_tombstones.enabled",
 	"enables the use of MVCC range tombstones",
-	true)
+	false)
 
 // CanUseMVCCRangeTombstones returns true if the caller can begin writing
 // MVCC range tombstones, by setting DeleteRangeRequest.UseRangeTombstone.

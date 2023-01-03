@@ -37,6 +37,7 @@ go_library(
         "slice.go",
         "slice_go1.9.go",
         "sst.go",
+        "sst_bounds_iter.go",
         "sst_writer.go",
         "store_properties.go",
         "temp_engine.go",

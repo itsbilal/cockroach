@@ -11,6 +11,7 @@
 package kvserver
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"sort"
@@ -171,11 +172,12 @@ type kvBatchSnapshotStrategy struct {
 // multiSSTWriter is a wrapper around an SSTWriter and SSTSnapshotStorageScratch
 // that handles chunking SSTs and persisting them to disk.
 type multiSSTWriter struct {
-	st       *cluster.Settings
-	scratch  *SSTSnapshotStorageScratch
-	currSST  storage.SSTWriter
-	keySpans []roachpb.Span
-	currSpan int
+	st            *cluster.Settings
+	scratch       *SSTSnapshotStorageScratch
+	currSST       storage.SSTWriter
+	keySpans      []roachpb.Span
+	exciseEnabled bool
+	currSpan      int
 	// The approximate size of the SST chunk to buffer in memory on the receiver
 	// before flushing to disk.
 	sstChunkSize int64
@@ -209,12 +211,14 @@ func (msstw *multiSSTWriter) initSST(ctx context.Context) error {
 	}
 	newSST := storage.MakeIngestionSSTWriter(ctx, msstw.st, newSSTFile)
 	msstw.currSST = newSST
-	if err := msstw.currSST.ClearRawRange(
-		msstw.keySpans[msstw.currSpan].Key, msstw.keySpans[msstw.currSpan].EndKey,
-		true /* pointKeys */, true, /* rangeKeys */
-	); err != nil {
-		msstw.currSST.Close()
-		return errors.Wrap(err, "failed to clear range on sst file writer")
+	if !msstw.exciseEnabled || msstw.currSpan < len(msstw.keySpans)-1 {
+		if err := msstw.currSST.ClearRawRange(
+			msstw.keySpans[msstw.currSpan].Key, msstw.keySpans[msstw.currSpan].EndKey,
+			true /* pointKeys */, true, /* rangeKeys */
+		); err != nil {
+			msstw.currSST.Close()
+			return errors.Wrap(err, "failed to clear range on sst file writer")
+		}
 	}
 	return nil
 }
@@ -245,6 +249,26 @@ func (msstw *multiSSTWriter) Put(ctx context.Context, key storage.EngineKey, val
 		return errors.AssertionFailedf("client error: expected %s to fall in one of %s", key.Key, msstw.keySpans)
 	}
 	if err := msstw.currSST.PutEngineKey(key, value); err != nil {
+		return errors.Wrap(err, "failed to put in sst")
+	}
+	return nil
+}
+
+func (msstw *multiSSTWriter) PutInternalKey(ctx context.Context, key pebble.InternalKey, value []byte) error {
+	for msstw.keySpans[msstw.currSpan].EndKey.Compare(key.UserKey) <= 0 {
+		// Finish the current SST, write to the file, and move to the next key
+		// range.
+		if err := msstw.finalizeSST(ctx); err != nil {
+			return err
+		}
+		if err := msstw.initSST(ctx); err != nil {
+			return err
+		}
+	}
+	if msstw.keySpans[msstw.currSpan].Key.Compare(key.UserKey) > 0 {
+		return errors.AssertionFailedf("client error: expected %s to fall in one of %s", key.UserKey, msstw.keySpans)
+	}
+	if err := msstw.currSST.PutInternalKey(key, value); err != nil {
 		return errors.Wrap(err, "failed to put in sst")
 	}
 	return nil
@@ -402,7 +426,12 @@ func (kvSS *kvBatchSnapshotStrategy) Receive(
 	// At the moment we'll write at most five SSTs.
 	// TODO(jeffreyxiao): Re-evaluate as the default range size grows.
 	keyRanges := rditer.MakeReplicatedKeySpans(header.State.Desc)
+	var exciseSpan roachpb.Span
 	msstw, err := newMultiSSTWriter(ctx, kvSS.st, kvSS.scratch, keyRanges, kvSS.sstChunkSize)
+	if header.SenderQueueName == kvserverpb.SnapshotRequest_REPLICATE_QUEUE && header.State.Desc.KeySpan().Key.AsRawKey().Compare(keys.TableDataMin) >= 0 {
+		exciseSpan = keyRanges[len(keyRanges)-1]
+		msstw.exciseEnabled = true
+	}
 	if err != nil {
 		return noSnap, err
 	}
@@ -463,8 +492,16 @@ func (kvSS *kvBatchSnapshotStrategy) Receive(
 						}
 					}
 
+				case storage.BatchTypeSingleDeletion, storage.BatchTypeDeletion:
+					key := batchReader.InternalKey()
+					if err := msstw.PutInternalKey(ctx, key, nil); err != nil {
+						return noSnap, errors.Wrapf(err, "writing sst for raft snapshot")
+					}
 				default:
-					return noSnap, errors.AssertionFailedf("unexpected batch entry type %d", batchReader.BatchType())
+					key := batchReader.InternalKey()
+					if err := msstw.PutInternalKey(ctx, key, batchReader.Value()); err != nil {
+						return noSnap, errors.Wrapf(err, "writing sst for raft snapshot")
+					}
 				}
 			}
 			timingTag.stop("sst")
@@ -513,6 +550,7 @@ func (kvSS *kvBatchSnapshotStrategy) Receive(
 				Desc:              header.State.Desc,
 				DataSize:          dataSize,
 				SharedSSTs:        sharedSSTs,
+				ExciseSpan:        exciseSpan,
 				snapType:          header.Type,
 				raftAppliedIndex:  header.State.RaftAppliedIndex,
 			}
@@ -590,8 +628,9 @@ func (kvSS *kvBatchSnapshotStrategy) Send(
 		return nil
 	}
 
-	skipShared := header.SenderQueueName == kvserverpb.SnapshotRequest_REPLICATE_QUEUE
-	err := rditer.IterateReplicaKeySpansShared(snap.State.Desc, snap.EngineSnap, true /* replicatedOnly */, skipShared, /* skipShared */
+	skipShared := header.SenderQueueName == kvserverpb.SnapshotRequest_REPLICATE_QUEUE && snap.State.Desc.KeySpan().Key.AsRawKey().Compare(keys.TableDataMin) >= 0
+	var err error
+	err = rditer.IterateReplicaKeySpans(snap.State.Desc, snap.EngineSnap, true /* replicatedOnly */, skipShared,
 		func(iter storage.EngineIterator, _ roachpb.Span, keyType storage.IterKeyType) error {
 			timingTag.start("iter")
 			defer timingTag.stop("iter")
@@ -608,11 +647,11 @@ func (kvSS *kvBatchSnapshotStrategy) Send(
 					if err != nil {
 						return err
 					}
-					v, err := iter.UnsafeValue()
+					value, err := iter.UnsafeValue()
 					if err != nil {
 						return err
 					}
-					if err = b.PutEngineKey(key, v); err != nil {
+					if err = b.PutEngineKey(key, value); err != nil {
 						return err
 					}
 					if err = maybeFlushBatch(); err != nil {
@@ -645,17 +684,72 @@ func (kvSS *kvBatchSnapshotStrategy) Send(
 				return errors.AssertionFailedf("unexpected key type %v", keyType)
 			}
 			return err
-		}, func(_ roachpb.Span, meta pebble.SharedSSTMeta) {
-			sstMeta := &kvserverpb.SnapshotRequest_SharedSST{
-				CreatorUniqueId:  meta.CreatorUniqueID,
-				FileNum:          meta.PhysicalFileNum,
-				Smallest:         meta.Smallest,
-				Largest:          meta.Largest,
-				PhysicalSmallest: meta.FileSmallest,
-				PhysicalLargest:  meta.FileLargest,
-			}
-			sharedSSTs = append(sharedSSTs, sstMeta)
 		})
+	if err != nil {
+		return 0, err
+	}
+	if skipShared {
+		usedFiles := make(map[uint64]struct{})
+		err = rditer.IterateReplicaKeySpansShared(snap.State.Desc, snap.EngineSnap,
+			func(iter storage.InternalMVCCIterator, _ roachpb.Span, keyType storage.IterKeyType) error {
+				timingTag.start("iter")
+				defer timingTag.stop("iter")
+
+				var err error
+				switch keyType {
+				case storage.IterKeyTypePointsOnly:
+					ok := true
+					var lastKey []byte
+					for ok && err == nil {
+						kvs++
+						if b == nil {
+							b = kvSS.newBatch()
+						}
+						key := iter.UnsafeKey()
+						if key == nil {
+							break
+						}
+						if bytes.Equal(key.UserKey, lastKey) {
+							iter.Next()
+							ok, err = iter.Valid()
+							continue
+						}
+						if err = b.PutInternalKey(*key, iter.UnsafeValue()); err != nil {
+							return err
+						}
+						lastKey = append(lastKey[:0], key.UserKey...)
+						if err = maybeFlushBatch(); err != nil {
+							return err
+						}
+						iter.Next()
+						ok, err = iter.Valid()
+					}
+
+				case storage.IterKeyTypeRangesOnly:
+					panic("unexpected range key in snapshot")
+
+				default:
+					return errors.AssertionFailedf("unexpected key type %v", keyType)
+				}
+				return err
+			}, func(_ roachpb.Span, meta pebble.SharedSSTMeta) {
+				if _, ok := usedFiles[meta.PhysicalFileNum]; ok {
+					return
+				}
+				usedFiles[meta.PhysicalFileNum] = struct{}{}
+				sstMeta := &kvserverpb.SnapshotRequest_SharedSST{
+					CreatorUniqueId:  meta.CreatorUniqueID,
+					FileNum:          meta.PhysicalFileNum,
+					Smallest:         meta.Smallest,
+					Largest:          meta.Largest,
+					PhysicalSmallest: meta.FileSmallest,
+					PhysicalLargest:  meta.FileLargest,
+					SourceLevel:      uint32(meta.SourceLevel),
+				}
+				sharedSSTs = append(sharedSSTs, sstMeta)
+			})
+	}
+
 	if err != nil {
 		return 0, err
 	}

@@ -60,6 +60,14 @@ type pebbleBatch struct {
 	shouldWriteLocalTimestampsCached bool
 }
 
+func (p *pebbleBatch) NewEngineInternalIterator(opts IterOptions) InternalMVCCIterator {
+	panic("implement me")
+}
+
+func (p *pebbleBatch) PutInternalKey(key pebble.InternalKey, value []byte) error {
+	return p.batch.AddInternalKey(key, value, nil)
+}
+
 var _ Batch = &pebbleBatch{}
 
 var pebbleBatchPool = sync.Pool{

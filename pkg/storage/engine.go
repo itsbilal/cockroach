@@ -211,6 +211,63 @@ type SimpleMVCCIterator interface {
 	RangeKeyChanged() bool
 }
 
+type InternalMVCCIterator interface {
+	// Close frees up resources held by the iterator.
+	Close()
+	// SeekGE advances the iterator to the first key in the engine which is >= the
+	// provided key. This may be in the middle of a bare range key straddling the
+	// seek key.
+	SeekGE(key MVCCKey)
+	SeekEngineKeyGE(key EngineKey)
+	// Valid must be called after any call to Seek(), Next(), Prev(), or
+	// similar methods. It returns (true, nil) if the iterator points to
+	// a valid key (it is undefined to call Key(), Value(), or similar
+	// methods unless Valid() has returned (true, nil)). It returns
+	// (false, nil) if the iterator has moved past the end of the valid
+	// range, or (false, err) if an error has occurred. Valid() will
+	// never return true with a non-nil error.
+	Valid() (bool, error)
+	// Next advances the iterator to the next key in the iteration. After this
+	// call, Valid() will be true if the iterator was not positioned at the last
+	// key.
+	Next()
+	// UnsafeKey returns the current key position. This may be a point key, or
+	// the current position inside a range key (typically the start key
+	// or the seek key when using SeekGE within its bounds).
+	//
+	// The memory is invalidated on the next call to {Next,NextKey,Prev,SeekGE,
+	// SeekLT,Close}. Use Key() if this is undesirable.
+	UnsafeKey() *pebble.InternalKey
+	// UnsafeValue returns the current point key value as a byte slice.
+	// This must only be called when it is known that the iterator is positioned
+	// at a point value, i.e. HasPointAndRange has returned (true, *). If
+	// possible, use MVCCValueLenAndIsTombstone() instead.
+	//
+	// The memory is invalidated on the next call to {Next,NextKey,Prev,SeekGE,SeekLT,Close}.
+	// Use Value() if that is undesirable.
+	UnsafeValue() []byte
+	// HasPointAndRange returns whether the current iterator position has a point
+	// key and/or a range key. Must check Valid() first. At least one of these
+	// will always be true for a valid iterator. For details on range keys, see
+	// comment on SimpleMVCCIterator.
+	HasPointAndRange() (bool, bool)
+	// RangeBounds returns the range bounds for the current range key, or an
+	// empty span if there are none. The returned keys are valid until the
+	// range key changes, see RangeKeyChanged().
+	RangeBounds() roachpb.Span
+	// RangeKeys returns a stack of all range keys (with different timestamps) at
+	// the current key position. When at a point key, it will return all range
+	// keys overlapping that point key. The stack is valid until the range key
+	// changes, see RangeKeyChanged().
+	//
+	// For details on range keys, see SimpleMVCCIterator comment, or tech note:
+	// https://github.com/cockroachdb/cockroach/blob/master/docs/tech-notes/mvcc-range-tombstones.md
+	RangeKeys() MVCCRangeKeyStack
+	// RangeKeyChanged returns true if the previous seek or step moved to a
+	// different range key (or none at all). This includes an exhausted iterator.
+	RangeKeyChanged() bool
+}
+
 // IteratorStats is returned from {MVCCIterator,EngineIterator}.Stats.
 type IteratorStats struct {
 	// Iteration stats. We directly expose pebble.IteratorStats. Callers
@@ -590,6 +647,8 @@ type Reader interface {
 	// with the iterator to free resources. The caller can change IterOptions
 	// after this function returns.
 	NewEngineIterator(opts IterOptions) EngineIterator
+	// NewEngineInternalIterator returns a new InternalIterator
+	NewEngineInternalIterator(opts IterOptions) InternalMVCCIterator
 	// ConsistentIterators returns true if the Reader implementation guarantees
 	// that the different iterators constructed by this Reader will see the same
 	// underlying Engine state. This is not true about Batch writes: new iterators
@@ -802,6 +861,8 @@ type Writer interface {
 	// It is safe to modify the contents of the arguments after Put returns.
 	PutEngineKey(key EngineKey, value []byte) error
 
+	PutInternalKey(key pebble.InternalKey, value []byte) error
+
 	// LogData adds the specified data to the RocksDB WAL. The data is
 	// uninterpreted by RocksDB (i.e. not added to the memtable or sstables).
 	//
@@ -934,7 +995,7 @@ type Engine interface {
 	// IngestExternalFilesWithStats is a variant of IngestExternalFiles that
 	// additionally returns ingestion stats.
 	IngestExternalFilesWithStats(
-		ctx context.Context, paths []string, sharedSSTs []pebble.SharedSSTMeta) (pebble.IngestOperationStats, error)
+		ctx context.Context, paths []string, sharedSSTs []pebble.SharedSSTMeta, exciseSpan roachpb.Span) (pebble.IngestOperationStats, error)
 	// PreIngestDelay offers an engine the chance to backpressure ingestions.
 	// When called, it may choose to block if the engine determines that it is in
 	// or approaching a state where further ingestions may risk its health.

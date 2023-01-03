@@ -228,6 +228,7 @@ message SnapshotRequest {
     bytes largest = 4;
     bytes physical_smallest = 5;
     bytes physical_largest = 6;
+    uint32 source_level = 7;
   }
 
   Header header = 1;

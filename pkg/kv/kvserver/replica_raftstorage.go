@@ -331,6 +331,7 @@ type IncomingSnapshot struct {
 	Desc             *roachpb.RangeDescriptor
 	DataSize         int64
 	SharedSSTs       []kvserverpb.SnapshotRequest_SharedSST
+	ExciseSpan       roachpb.Span
 	snapType         kvserverpb.SnapshotRequest_Type
 	placeholder      *ReplicaPlaceholder
 	raftAppliedIndex uint64 // logging only
@@ -575,6 +576,12 @@ func (r *Replica) applySnapshot(
 		}
 		logDetails.Printf(" ingestion=%d@%0.0fms", len(inSnap.SSTStorageScratch.SSTs()),
 			stats.ingestion.Sub(stats.subsumedReplicas).Seconds()*1000)
+		if inSnap.ExciseSpan.Valid() {
+			logDetails.Printf(" excised=[%s-%s]", inSnap.ExciseSpan.Key, inSnap.ExciseSpan.EndKey)
+		}
+		if len(inSnap.SharedSSTs) > 0 {
+			logDetails.Printf(" shared=%dfiles", len(inSnap.SharedSSTs))
+		}
 		log.Infof(ctx, "applied %s (%s)", inSnap, logDetails)
 	}(timeutil.Now())
 
@@ -659,6 +666,7 @@ func (r *Replica) applySnapshot(
 		sharedSSTs = append(sharedSSTs, pebble.SharedSSTMeta{
 			CreatorUniqueID: inSnap.SharedSSTs[i].CreatorUniqueId,
 			PhysicalFileNum: inSnap.SharedSSTs[i].FileNum,
+			SourceLevel:     uint8(inSnap.SharedSSTs[i].SourceLevel),
 			Smallest:        inSnap.SharedSSTs[i].Smallest,
 			Largest:         inSnap.SharedSSTs[i].Largest,
 			FileSmallest:    inSnap.SharedSSTs[i].PhysicalSmallest,
@@ -666,7 +674,7 @@ func (r *Replica) applySnapshot(
 		})
 	}
 	if ingestStats, err =
-		r.store.engine.IngestExternalFilesWithStats(ctx, inSnap.SSTStorageScratch.SSTs(), sharedSSTs); err != nil {
+		r.store.engine.IngestExternalFilesWithStats(ctx, inSnap.SSTStorageScratch.SSTs(), sharedSSTs, inSnap.ExciseSpan); err != nil {
 		return errors.Wrapf(err, "while ingesting %s", inSnap.SSTStorageScratch.SSTs())
 	}
 	if r.store.cfg.KVAdmissionController != nil {

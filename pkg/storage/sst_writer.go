@@ -20,6 +20,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/cockroachdb/errors"
+	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/sstable"
 )
 
@@ -157,6 +158,11 @@ func (fw *SSTWriter) ClearMVCCRange(start, end roachpb.Key, pointKeys, rangeKeys
 // ClearMVCCVersions implements the Writer interface.
 func (fw *SSTWriter) ClearMVCCVersions(start, end MVCCKey) error {
 	return fw.clearRange(start, end)
+}
+
+// PutInternalKey TODO
+func (fw *SSTWriter) PutInternalKey(key pebble.InternalKey, value []byte) error {
+	return fw.fw.Add(key, value)
 }
 
 // PutMVCCRangeKey implements the Writer interface.

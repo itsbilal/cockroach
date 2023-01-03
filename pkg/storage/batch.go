@@ -148,6 +148,14 @@ func (r *PebbleBatchReader) Key() []byte {
 	return r.key
 }
 
+// Key returns the key of the current batch entry.
+func (r *PebbleBatchReader) InternalKey() pebble.InternalKey {
+	ikey := pebble.InternalKey{}
+	ikey.UserKey = r.key
+	ikey.SetKind(pebble.InternalKeyKind(r.typ))
+	return ikey
+}
+
 // MVCCKey returns the MVCC key of the current batch entry.
 func (r *PebbleBatchReader) MVCCKey() (MVCCKey, error) {
 	return DecodeMVCCKey(r.Key())

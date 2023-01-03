@@ -96,6 +96,161 @@ func newPebbleIterator(
 	return p
 }
 
+// newPebbleInternalIterator creates a new Pebble iterator for the given Pebble reader.
+func newPebbleInternalIterator(
+	handle pebble.Reader, opts IterOptions,
+) *pebbleInternalIterator {
+	p := &pebbleInternalIterator{}
+	p.setOptions(opts)
+	p.init(handle.NewInternalIter(&p.options))
+	return p
+}
+
+type pebbleInternalIterator struct {
+	iter                         *pebble.InternalIterator
+	options                      pebble.IterOptions
+	ikey                         *pebble.InternalKey
+	val                          pebble.LazyValue
+	lowerBoundBuf, upperBoundBuf []byte
+}
+
+var _ InternalMVCCIterator = &pebbleInternalIterator{}
+
+func (p *pebbleInternalIterator) init(iter *pebble.InternalIterator) {
+	p.iter = iter
+}
+
+func (p *pebbleInternalIterator) Close() {
+	_ = p.iter.Close()
+}
+
+func (p *pebbleInternalIterator) SeekGE(key MVCCKey) {
+	p.ikey, p.val = p.iter.SeekGE(EncodeMVCCKey(key))
+}
+
+func (p *pebbleInternalIterator) SeekEngineKeyGE(key EngineKey) {
+	p.ikey, p.val = p.iter.SeekGE(key.Encode())
+}
+
+func (p *pebbleInternalIterator) Valid() (bool, error) {
+	return p.ikey != nil, nil
+}
+
+func (p *pebbleInternalIterator) Next() {
+	p.ikey, p.val = p.iter.Next()
+}
+
+func (p *pebbleInternalIterator) UnsafeKey() *pebble.InternalKey {
+	return p.ikey
+}
+
+func (p *pebbleInternalIterator) UnsafeValue() []byte {
+	return p.val.InPlaceValue()
+}
+
+func (p *pebbleInternalIterator) HasPointAndRange() (bool, bool) {
+	return p.ikey != nil, false
+}
+
+func (p *pebbleInternalIterator) RangeBounds() roachpb.Span {
+	return roachpb.Span{}
+}
+
+func (p *pebbleInternalIterator) RangeKeys() MVCCRangeKeyStack {
+	return MVCCRangeKeyStack{}
+}
+
+func (p *pebbleInternalIterator) RangeKeyChanged() bool {
+	return false
+}
+
+// setOptions updates the options for a pebbleIterator. If p.iter is non-nil, it
+// updates the options on the existing iterator too.
+func (p *pebbleInternalIterator) setOptions(opts IterOptions) {
+	if !opts.Prefix && len(opts.UpperBound) == 0 && len(opts.LowerBound) == 0 {
+		panic("iterator must set prefix or upper bound or lower bound")
+	}
+	if opts.MinTimestampHint.IsSet() && opts.MaxTimestampHint.IsEmpty() {
+		panic("min timestamp hint set without max timestamp hint")
+	}
+	if opts.Prefix && opts.RangeKeyMaskingBelow.IsSet() {
+		panic("can't use range key masking with prefix iterators") // very high overhead
+	}
+
+	// If this Pebble database does not support range keys yet, fall back to
+	// only iterating over point keys to avoid panics. This is effectively the
+	// same, since a database without range key support contains no range keys,
+	// except in the case of RangesOnly where the iterator must always be empty.
+	opts.KeyTypes = IterKeyTypePointsOnly
+	opts.RangeKeyMaskingBelow = hlc.Timestamp{}
+
+	// Generate new Pebble iterator options.
+	p.options = pebble.IterOptions{
+		KeyTypes:           opts.KeyTypes,
+		UseL6Filters:       opts.useL6Filters,
+		SkipSharedFile:     opts.SkipSharedFile,
+		SharedFileCallback: opts.SharedFileCallback,
+	}
+
+	if opts.LowerBound != nil {
+		// This is the same as
+		// p.options.LowerBound = EncodeKeyToBuf(p.lowerBoundBuf[0][:0], MVCCKey{Key: opts.LowerBound})
+		// or EngineKey{Key: opts.LowerBound}.EncodeToBuf(...).
+		// Since we are encoding keys with an empty version anyway, we can just
+		// append the NUL byte instead of calling the above encode functions which
+		// will do the same thing.
+		p.lowerBoundBuf = append(p.lowerBoundBuf[:0], opts.LowerBound...)
+		p.lowerBoundBuf = append(p.lowerBoundBuf, 0x00)
+		p.options.LowerBound = p.lowerBoundBuf
+	}
+	if opts.UpperBound != nil {
+		// Same as above.
+		p.upperBoundBuf = append(p.upperBoundBuf[:0], opts.UpperBound...)
+		p.upperBoundBuf = append(p.upperBoundBuf, 0x00)
+		p.options.UpperBound = p.upperBoundBuf
+	}
+
+	if opts.MaxTimestampHint.IsSet() {
+		// TODO(erikgrinaker): For compatibility with SSTables written by 21.2 nodes
+		// or earlier, we filter on table properties too. We still wrote these
+		// properties in 22.1, but stop doing so in 22.2. We can remove this
+		// filtering when nodes are guaranteed to no longer have SSTables written by
+		// 21.2 or earlier (which can still happen e.g. when clusters are upgraded
+		// through multiple major versions in rapid succession).
+		encodedMinTS := string(encodeMVCCTimestamp(opts.MinTimestampHint))
+		encodedMaxTS := string(encodeMVCCTimestamp(opts.MaxTimestampHint))
+		p.options.TableFilter = func(userProps map[string]string) bool {
+			tableMinTS := userProps["crdb.ts.min"]
+			if len(tableMinTS) == 0 {
+				return true
+			}
+			tableMaxTS := userProps["crdb.ts.max"]
+			if len(tableMaxTS) == 0 {
+				return true
+			}
+			return encodedMaxTS >= tableMinTS && encodedMinTS <= tableMaxTS
+		}
+		// We are given an inclusive [MinTimestampHint, MaxTimestampHint]. The
+		// MVCCWAllTimeIntervalCollector has collected the WallTimes and we need
+		// [min, max), i.e., exclusive on the upper bound.
+		p.options.PointKeyFilters = []pebble.BlockPropertyFilter{
+			sstable.NewBlockIntervalFilter(mvccWallTimeIntervalCollector,
+				uint64(opts.MinTimestampHint.WallTime),
+				uint64(opts.MaxTimestampHint.WallTime)+1),
+		}
+		// NB: We disable range key block filtering because of complications in
+		// MVCCIncrementalIterator.maybeSkipKeys: the TBI may see different range
+		// key fragmentation than the main iterator due to the filtering. This would
+		// necessitate additional seeks/processing that likely negate the marginal
+		// benefit of the range key filters. See:
+		// https://github.com/cockroachdb/cockroach/issues/86260.
+		//
+		// However, we do collect block properties for range keys, in case we enable
+		// this later.
+		p.options.RangeKeyFilters = nil
+	}
+}
+
 // newPebbleIteratorByCloning creates a new Pebble iterator by cloning the given
 // iterator and reconfiguring it.
 func newPebbleIteratorByCloning(

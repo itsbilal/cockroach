@@ -1190,6 +1190,11 @@ func (p *Pebble) NewEngineIterator(opts IterOptions) EngineIterator {
 	return newPebbleIterator(p.db, opts, StandardDurability, p.SupportsRangeKeys())
 }
 
+// NewEngineIterator implements the Engine interface.
+func (p *Pebble) NewEngineInternalIterator(opts IterOptions) InternalMVCCIterator {
+	return newPebbleInternalIterator(p.db, opts)
+}
+
 // ConsistentIterators implements the Engine interface.
 func (p *Pebble) ConsistentIterators() bool {
 	return false
@@ -1383,6 +1388,10 @@ func (p *Pebble) PutEngineKey(key EngineKey, value []byte) error {
 		return emptyKeyError()
 	}
 	return p.db.Set(key.Encode(), value, pebble.Sync)
+}
+
+func (p *Pebble) PutInternalKey(key pebble.InternalKey, value []byte) error {
+	panic("unimplemented")
 }
 
 func (p *Pebble) put(key MVCCKey, value []byte) error {
@@ -1731,12 +1740,20 @@ func (p *Pebble) IngestExternalFiles(ctx context.Context, paths []string) error 
 
 // IngestExternalFilesWithStats implements the Engine interface.
 func (p *Pebble) IngestExternalFilesWithStats(
-	ctx context.Context, paths []string, sharedSSTs []pebble.SharedSSTMeta,
+	ctx context.Context, paths []string, sharedSSTs []pebble.SharedSSTMeta, exciseSpan roachpb.Span,
 ) (pebble.IngestOperationStats, error) {
+	var span rangekey.Span
+	if exciseSpan.Valid() {
+		startRaw, endRaw := EngineKey{Key: exciseSpan.Key}.Encode(), EngineKey{Key: exciseSpan.EndKey}.Encode()
+		span = rangekey.Span{Start: startRaw, End: endRaw}
+	}
 	if len(sharedSSTs) != 0 {
-		if err := p.db.Ingest(nil, sharedSSTs); err != nil {
+		if err := p.db.IngestAndExcise(nil, sharedSSTs, span); err != nil {
 			return pebble.IngestOperationStats{}, err
 		}
+		return p.db.IngestWithStats(paths, nil)
+	} else if exciseSpan.Valid() {
+		return pebble.IngestOperationStats{}, p.db.IngestAndExcise(paths, nil, span)
 	}
 	return p.db.IngestWithStats(paths, nil)
 }
@@ -2096,6 +2113,14 @@ func (p *pebbleReadOnly) NewEngineIterator(opts IterOptions) EngineIterator {
 	return iter
 }
 
+func (p *pebbleReadOnly) NewEngineInternalIterator(o IterOptions) InternalMVCCIterator {
+	return p.parent.NewEngineInternalIterator(o)
+}
+
+func (p *pebbleReadOnly) PutInternalKey(key pebble.InternalKey, value []byte) error {
+	panic("read only")
+}
+
 // ConsistentIterators implements the Engine interface.
 func (p *pebbleReadOnly) ConsistentIterators() bool {
 	return true
@@ -2235,6 +2260,11 @@ type pebbleSnapshot struct {
 	snapshot *pebble.Snapshot
 	parent   *Pebble
 	closed   bool
+}
+
+func (p *pebbleSnapshot) NewEngineInternalIterator(opts IterOptions) InternalMVCCIterator {
+	//TODO implement me
+	return newPebbleInternalIterator(p.snapshot, opts)
 }
 
 var _ Reader = &pebbleSnapshot{}
