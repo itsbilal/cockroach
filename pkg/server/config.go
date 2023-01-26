@@ -708,11 +708,11 @@ func (cfg *Config) CreateEngines(ctx context.Context) (Engines, error) {
 		if err != nil {
 			return Engines{}, err
 		}
-		//cachePath := vfs.Default.PathJoin(cfg.Stores.Specs[0].Path, "cache")
-		//if err := vfs.Default.MkdirAll(cachePath, 0755); err != nil {
-		//	return Engines{}, errors.Wrap(err, "creating store directory")
-		//}
-		//pebbleCache.AddSecondaryCache(cachePath, vfs.Default.(vfs.FSWithOpenForWrites), 16<<30)
+		cachePath := vfs.Default.PathJoin(cfg.Stores.Specs[0].Path, "cache")
+		if err := vfs.Default.MkdirAll(cachePath, 0755); err != nil {
+			return Engines{}, errors.Wrap(err, "creating store directory")
+		}
+		pebbleCache.AddSecondaryCache(cachePath, vfs.Default.(vfs.FSWithOpenForWrites), 40<<30)
 	}
 
 	rand, _ := randutil.NewPseudoRand()
