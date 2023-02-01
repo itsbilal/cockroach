@@ -1507,7 +1507,7 @@ def go_deps():
         ],
         vcs = "git",
         remote = "https://github.com/itsbilal/pebble",  # Custom fork.
-        commit = "fe7aeae69b73abd5b8e94b0bf2fc4ada6a4c5f24",  # Custom commit.
+        commit = "8285bad6e53e68662667317b37b1e1e2b7672f41",  # Custom commit.
     )
     go_repository(
         name = "com_github_cockroachdb_redact",

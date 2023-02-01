@@ -112,7 +112,7 @@ var rocksdbConcurrency = envutil.EnvOrDefaultInt(
 	"COCKROACH_ROCKSDB_CONCURRENCY", func() int {
 		// Use up to min(numCPU, 4) threads for background RocksDB compactions per
 		// store.
-		const max = 4
+		const max = 8
 		if n := runtime.GOMAXPROCS(0); n <= max {
 			return n
 		}
