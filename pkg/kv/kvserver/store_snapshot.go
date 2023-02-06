@@ -63,11 +63,11 @@ const (
 
 	// DefaultSnapshotSendLimit is the max number of snapshots concurrently sent.
 	// See server.KVConfig for more info.
-	DefaultSnapshotSendLimit = 2
+	DefaultSnapshotSendLimit = 20
 
 	// DefaultSnapshotApplyLimit is the number of snapshots concurrently applied.
 	// See server.KVConfig for more info.
-	DefaultSnapshotApplyLimit = 1
+	DefaultSnapshotApplyLimit = 10
 )
 
 // snapshotPrioritizationEnabled will allow the sender and receiver of snapshots
