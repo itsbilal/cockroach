@@ -712,7 +712,7 @@ func (cfg *Config) CreateEngines(ctx context.Context) (Engines, error) {
 		if err := vfs.Default.MkdirAll(cachePath, 0755); err != nil {
 			return Engines{}, errors.Wrap(err, "creating store directory")
 		}
-		pebbleCache.AddSecondaryCache(cachePath, vfs.Default.(vfs.FSWithOpenForWrites), 40<<30)
+		pebbleCache.AddSecondaryCache(cachePath, vfs.Default.(vfs.FSWithOpenForWrites), 20<<30)
 	}
 
 	rand, _ := randutil.NewPseudoRand()
