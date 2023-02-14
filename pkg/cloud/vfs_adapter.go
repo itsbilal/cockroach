@@ -27,7 +27,7 @@ import (
 type vfsAdapter struct {
 	ExternalStorage
 
-	ctx context.Context
+	ctx      context.Context
 	basePath string
 }
 
@@ -35,9 +35,9 @@ type externalStorageFile struct {
 	reader      sstable.ReadableFile
 	writer      *bufio.Writer
 	writeCloser io.WriteCloser
-	v *vfsAdapter
-	name string
-	offset int64
+	v           *vfsAdapter
+	name        string
+	offset      int64
 }
 
 func (e *externalStorageFile) Close() error {
@@ -127,7 +127,7 @@ func (v *vfsAdapter) Create(name string) (vfs.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	wrappedWriter := bufio.NewWriterSize(writer, 64 << 10)
+	wrappedWriter := bufio.NewWriterSize(writer, 64<<10)
 	return &externalStorageFile{writer: wrappedWriter, writeCloser: writer}, nil
 }
 
@@ -209,11 +209,11 @@ func (v *vfsAdapter) List(dir string) ([]string, error) {
 }
 
 func (v *vfsAdapter) Stat(name string) (os.FileInfo, error) {
-	f, err := v.Open(name)
+	size, err := v.ExternalStorage.Size(v.ctx, path.Join(v.basePath, name))
 	if err != nil {
 		return nil, err
 	}
-	return f.Stat()
+	return fileStat{name: name, size: size}, nil
 }
 
 func (v *vfsAdapter) PathBase(strPath string) string {
