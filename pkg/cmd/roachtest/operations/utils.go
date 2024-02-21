@@ -15,11 +15,11 @@ import (
 	gosql "database/sql"
 	"fmt"
 
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/operation"
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 )
 
-func pickRandomDB(ctx context.Context, o test.Test, conn *gosql.DB) string {
+func pickRandomDB(ctx context.Context, o operation.Operation, conn *gosql.DB) string {
 	rng, _ := randutil.NewPseudoRand()
 
 	// Pick a random table.
@@ -47,7 +47,7 @@ func pickRandomDB(ctx context.Context, o test.Test, conn *gosql.DB) string {
 	return dbNames[rng.Intn(len(dbNames))]
 }
 
-func pickRandomTable(ctx context.Context, o test.Test, conn *gosql.DB, dbName string) string {
+func pickRandomTable(ctx context.Context, o operation.Operation, conn *gosql.DB, dbName string) string {
 	rng, _ := randutil.NewPseudoRand()
 
 	// Pick a random table.

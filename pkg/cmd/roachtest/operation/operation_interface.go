@@ -10,12 +10,35 @@
 
 package operation
 
-import "github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
+import "github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 
 type Operation interface {
-	// TODO(bilal): Instead of encapsulating test.Test, copy over the small
-	// set of relevant methods, ideally moving them to a shared interface.
-	test.Test
+	// TODO(bilal): Move method sthat are common between this and test.Test
+	// in one shared interface.
+	Cockroach() string
+	Name() string
+	// Spec returns the *registry.OperationSpec as an interface{}.
+	Spec() interface{}
+	SkipInit() bool
+	Skip(args ...interface{})
+	Skipf(format string, args ...interface{})
+	Error(args ...interface{})
+	Errorf(string, ...interface{})
+	FailNow()
+	Fatal(args ...interface{})
+	Fatalf(format string, args ...interface{})
+	Failed() bool
+
+	ArtifactsDir() string
+
+	L() *logger.Logger
+	Progress(float64)
+	Status(args ...interface{})
+	IsDebug() bool
+
+	// DeprecatedWorkload returns the path to the workload binary.
+	// Don't use this, invoke `./cockroach workload` instead.
+	DeprecatedWorkload() string
 
 	GetCleanupState(string) string
 	SetCleanupState(string, string)
