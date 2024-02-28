@@ -73,7 +73,9 @@ func runDrt(configFile string) (retErr error) {
 	if err := decoder.Decode(&c); err != nil {
 		return err
 	}
-	wr := makeWorkloadRunner(c)
+
+	eventL := makeEventLogger(os.Stdout, c)
+	wr := makeWorkloadRunner(c, eventL)
 	wg.Add(1)
 
 	go func() {
@@ -84,10 +86,17 @@ func runDrt(configFile string) (retErr error) {
 		}
 	}()
 
-	or, err := makeOpsRunner(c.Operations.Parallelism /* parallelism */, c)
+	or, err := makeOpsRunner(c.Operations.Parallelism /* parallelism */, c, eventL)
 	if err != nil {
 		return err
 	}
+
+	hh := httpHandler{
+		ctx: ctx,
+		w:   wr,
+		o:   or,
+	}
+	hh.startHTTPServer(8080, "localhost")
 	or.Run(ctx)
 
 	return nil

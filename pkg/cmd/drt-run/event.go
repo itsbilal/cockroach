@@ -12,7 +12,10 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"strings"
+
+	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 )
 
 type EventType int
@@ -30,6 +33,9 @@ const (
 	SourceOperation EventSource = false
 	SourceWorkload  EventSource = true
 )
+
+const perWorkloadEventRetention = 1000
+const operationEventRetention = 1000
 
 type Event struct {
 	Type       EventType
@@ -61,4 +67,43 @@ func (e *Event) String() string {
 		fmt.Fprintf(&builder, " returned an error %s", e.Details)
 	}
 	return builder.String()
+}
+
+type workloadEvents struct {
+	workloadName string
+	events       []Event
+}
+
+type eventLogger struct {
+	outputFile io.Writer
+
+	mu struct {
+		syncutil.Mutex
+		workloadEvents  []workloadEvents
+		operationEvents []Event
+	}
+}
+
+func (l *eventLogger) logOperationEvent(ev Event) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// TODO(bilal): make this a circular buffer.
+	l.mu.operationEvents = append(l.mu.operationEvents, ev)
+	if len(l.mu.operationEvents) > operationEventRetention {
+		copy(l.mu.operationEvents, l.mu.operationEvents[1:])
+		l.mu.operationEvents = l.mu.operationEvents[:len(l.mu.operationEvents)-1]
+	}
+}
+
+func makeEventLogger(out io.Writer, c config) *eventLogger {
+	el := &eventLogger{
+		outputFile: out,
+	}
+	el.mu.workloadEvents = make([]workloadEvents, len(c.Workloads))
+	for i := range c.Workloads {
+		el.mu.workloadEvents[i].workloadName = c.Workloads[i].Name
+	}
+	el.mu.operationEvents = make([]Event, 0, operationEventRetention)
+	return el
 }

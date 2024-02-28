@@ -32,7 +32,8 @@ type operationImpl struct {
 	debug              bool   // whether the test is in debug mode.
 
 	// l is the logger that the operation will use for its output.
-	l *logger.Logger
+	l      *logger.Logger
+	eventL *eventLogger
 
 	// artifactsDir is the path to the directory holding all the artifacts for
 	// this test. It will contain a test.log file and cluster logs.
@@ -168,19 +169,19 @@ func (t *operationImpl) Skipf(format string, args ...interface{}) {
 // from a test's closure. The test runner itself should never call this.
 func (t *operationImpl) Fatal(args ...interface{}) {
 	t.addFailureAndCancel(1, "", args...)
-	panic(errTestFatal)
+	//panic(errTestFatal)
 }
 
 // Fatalf is like Fatal, but takes a format string.
 func (t *operationImpl) Fatalf(format string, args ...interface{}) {
 	t.addFailureAndCancel(1, format, args...)
-	panic(errTestFatal)
+	//panic(errTestFatal)
 }
 
 // FailNow implements the TestingT interface.
 func (t *operationImpl) FailNow() {
 	t.addFailureAndCancel(1, "FailNow called")
-	panic(errTestFatal)
+	//panic(errTestFatal)
 }
 
 // Error implements the TestingT interface

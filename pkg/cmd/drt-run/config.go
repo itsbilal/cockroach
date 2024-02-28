@@ -39,8 +39,8 @@ type config struct {
 	Operations struct {
 		Parallelism int
 		Sets        []struct {
-			Cadence, Timeout time.Duration
-			Filter           string
+			Cadence time.Duration
+			Filter  string
 		}
 	}
 }

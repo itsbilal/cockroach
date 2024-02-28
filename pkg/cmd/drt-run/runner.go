@@ -22,15 +22,19 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/operation"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/operations"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
+	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/logtags"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+const cleanupSelectionRatio = 0.5
 
 func ctrlC(ctx context.Context, cancel context.CancelFunc) {
 	sig := make(chan os.Signal, 1)
@@ -64,6 +68,13 @@ func (o *opsRegistry) PromFactory() promauto.Factory {
 
 var _ registry.Registry = &opsRegistry{}
 
+type deferredCleanup struct {
+	ctx        context.Context
+	op         operation.Operation
+	opSpec     *registry.OperationSpec
+	eligibleAt time.Time
+}
+
 type opsRunner struct {
 	specs       [][]registry.OperationSpec
 	config      config
@@ -72,29 +83,95 @@ type opsRunner struct {
 	parallelism int
 	seed        int64
 	errChan     chan error
-	eventChan   chan Event
+	eventLogger *eventLogger
+
+	mu struct {
+		syncutil.Mutex
+
+		lastRun          map[string]time.Time
+		deferredCleanups []deferredCleanup
+
+		runningOperations []*operationImpl
+	}
+}
+
+func (r *opsRunner) runningOperations() []*operationImpl {
+	ret := make([]*operationImpl, r.parallelism)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	copy(ret, r.mu.runningOperations)
+
+	return ret
+}
+
+func (r *opsRunner) pickCleanup(ctx context.Context, rng *rand.Rand) *deferredCleanup {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := range r.mu.deferredCleanups {
+		if r.mu.deferredCleanups[i].eligibleAt.After(time.Now()) {
+			continue
+		}
+
+		// Do a copy into dc, as we're going to overwrite the entry in
+		// deferredCleanups.
+		dc := r.mu.deferredCleanups[i]
+		copy(r.mu.deferredCleanups[i:], r.mu.deferredCleanups[i+1:])
+		r.mu.deferredCleanups = r.mu.deferredCleanups[:len(r.mu.deferredCleanups)-1]
+		return &dc
+	}
+	return nil
+}
+
+func (r *opsRunner) pickOperation(ctx context.Context, rng *rand.Rand) *registry.OperationSpec {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil
+		}
+		setIdx := rng.Intn(len(r.specs))
+		opSpecsSet := r.specs[setIdx]
+		opSpec := &opSpecsSet[rng.Intn(len(opSpecsSet))]
+		r.mu.Lock()
+		lastRun := r.mu.lastRun[opSpec.Name]
+		r.mu.Unlock()
+		eligibleForNextRun := lastRun.Add(r.config.Operations.Sets[setIdx].Cadence)
+
+		if time.Now().Compare(eligibleForNextRun) >= 0 {
+			return opSpec
+		}
+	}
 }
 
 func (r *opsRunner) runWorker(ctx context.Context, workerIdx int) {
-	rng := rand.New(rand.NewSource(r.seed))
+	rng := rand.New(rand.NewSource(r.seed + int64(workerIdx)))
 
 	for {
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		// TODO(bilal): Pick specs based on cadence, and clean up this code.
-		setIdx := rng.Intn(len(r.specs))
-		opSpecsSet := r.specs[setIdx]
-		opSpec := opSpecsSet[rng.Intn(len(opSpecsSet))]
+
+		if rng.Float64() <= cleanupSelectionRatio {
+			cleanup := r.pickCleanup(ctx, rng)
+			if cleanup != nil {
+				// NB: we rely on the ctx stored in the cleanup, as that has a timeout that
+				// encapsulates the original run of this operation.
+				cleanup.op.Status("running cleanup")
+				cleanup.opSpec.Cleanup(cleanup.ctx, cleanup.op, r.attachCluster())
+			}
+		}
+
+		opSpec := r.pickOperation(ctx, rng)
+
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, opSpec.Timeout)
 
 		operation := &operationImpl{
-			spec:               &opSpec,
+			spec:               opSpec,
 			cockroach:          r.config.CockroachBinary,
 			deprecatedWorkload: r.config.WorkloadBinary,
 			debug:              true,
 			l:                  r.l,
+			eventL:             r.eventLogger,
 			artifactsDir:       "artifacts",
 			cleanupState:       make(map[string]string),
 		}
@@ -104,21 +181,29 @@ func (r *opsRunner) runWorker(ctx context.Context, workerIdx int) {
 		c.(*roachprodCluster).o = operation
 
 		operation.Status("starting operation")
+		r.mu.Lock()
+		r.mu.lastRun[opSpec.Name] = time.Now()
+		r.mu.runningOperations[workerIdx] = operation
+		r.mu.Unlock()
+
 		opSpec.Run(ctx, operation, c)
 
-		if opSpec.Cleanup != nil {
-			operation.Status(fmt.Sprintf("operation ran successfully; waiting %s before cleanup", opSpec.CleanupWaitTime.String()))
-			if opSpec.CleanupWaitTime != 0 {
-				select {
-				case <-ctx.Done():
-					operation.Status("bailing due to cancellation")
-					return
-				case <-time.After(opSpec.CleanupWaitTime):
-				}
-			}
+		r.mu.Lock()
+		// TODO(bilal): surface
+		r.mu.runningOperations[workerIdx] = nil
+		r.mu.Unlock()
 
-			// TODO(bilal): Defer this cleanup to future loop runs.
-			opSpec.Cleanup(ctx, operation, c)
+		if opSpec.Cleanup != nil {
+			operation.Status(fmt.Sprintf("operation ran successfully; waiting %s before scheduling cleanup", opSpec.CleanupWaitTime.String()))
+
+			r.mu.Lock()
+			r.mu.deferredCleanups = append(r.mu.deferredCleanups, deferredCleanup{
+				ctx:        ctx,
+				op:         operation,
+				opSpec:     opSpec,
+				eligibleAt: time.Now().Add(opSpec.CleanupWaitTime),
+			})
+			r.mu.Unlock()
 		}
 	}
 }
@@ -146,7 +231,7 @@ func (r *opsRunner) Run(ctx context.Context) {
 	wg.Wait()
 }
 
-func makeOpsRunner(parallelism int, config config) (*opsRunner, error) {
+func makeOpsRunner(parallelism int, config config, eventLogger *eventLogger) (*opsRunner, error) {
 	r := &opsRegistry{}
 	_, seed := randutil.NewTestRand()
 
@@ -169,21 +254,22 @@ func makeOpsRunner(parallelism int, config config) (*opsRunner, error) {
 		config:      config,
 		registry:    r,
 		l:           l,
+		eventLogger: eventLogger,
 		seed:        seed,
 		parallelism: parallelism,
 		errChan:     make(chan error, parallelism),
-		eventChan:   make(chan Event, parallelism),
 	}
+	runner.mu.lastRun = make(map[string]time.Time)
+	runner.mu.runningOperations = make([]*operationImpl, parallelism)
 
 	return runner, nil
 }
 
 type workloadRunner struct {
-	config config
-
+	config           config
+	eventL           *eventLogger
 	workloadsRunning int
 	errChan          chan error
-	eventChan        chan Event
 }
 
 func (w *workloadRunner) runWorker(ctx context.Context, workloadIdx int, workload workloadConfig, l *logger.Logger) {
@@ -251,8 +337,6 @@ func (w *workloadRunner) Run(ctx context.Context) error {
 				return
 			case err := <-w.errChan:
 				l.Errorf("error: %s", err.Error())
-			case event := <-w.eventChan:
-				l.PrintfCtx(ctx, "event: %s", event.String())
 			}
 		}
 	}()
@@ -260,12 +344,12 @@ func (w *workloadRunner) Run(ctx context.Context) error {
 	return nil
 }
 
-func makeWorkloadRunner(config config) *workloadRunner {
+func makeWorkloadRunner(config config, eventL *eventLogger) *workloadRunner {
 	parallelism := len(config.Workloads)
 	runner := &workloadRunner{
-		config:    config,
-		errChan:   make(chan error, parallelism),
-		eventChan: make(chan Event, parallelism),
+		config:  config,
+		eventL:  eventL,
+		errChan: make(chan error, parallelism),
 	}
 	return runner
 }
